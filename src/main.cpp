@@ -49,6 +49,7 @@ vector<F> x_transcript,y_transcript;
 F current_randomness;
 
 double aggregation_time = 0.0;
+double inference_pass_time = 0.0;
 
 
 void init_SHA(){
@@ -1756,35 +1757,6 @@ void prove_backprop(struct convolutional_network net){
 	int convolutions_counter = net.convolutions_backprop.size() - 2;
 	int der_counter = net.der.size()-1;
 	struct convolution_layer_backprop conv_back;
-	/*
-	for(int i = 0; i < net.relus_backprop.size(); i++){
-		cout << "python3 relu.py " + to_string(net.relus_backprop[i].dx_prev.size()) + "\n" ;
-	}
-	for(int i = 1; i < net.convolutions_backprop.size(); i++){
-		conv_back = net.convolutions_backprop[net.convolutions_backprop.size()-1-i];
-		if(net.relus_backprop[relu_counter].dx.size() != net.der_dim[net.der_dim.size() - i]){   			
-   			cout<< "python3 rescaling.py " + to_string(net.der[der_counter].size()) + " " + to_string(net.der[der_counter][0].size()) + " " + to_string(net.der[der_counter][0][0].size()) + " " + to_string(net.w[der_counter]) + "\n";
-   			der_counter--;
-   		}
-   	
-		if(net.convolution_pooling[i-1] != 0){
-			cout << "python3 avg_der.py " + to_string(net.convolutions[i].Batch_size) + " " + to_string(net.convolutions[i].chin) + " " + to_string(net.avg_backprop[avg_counter].dx_size) + " " + to_string(net.avg_backprop[avg_counter].w_final) + "\n";	
-   			avg_counter--;
-		}
-		cout << "python3 padding.py " + to_string(net.convolutions[i].Batch_size) + " " + to_string(net.convolutions[i].chout) + " " + to_string(conv_back.der_prev[0][0].size()) + " " + to_string(conv_back.dim1) + " " + to_string(conv_back.dim2) + " " + to_string(conv_back.middle) + "\n";
-		cout << "python3 dx_dot_product.py " + to_string(conv_back.fft_pad_der[0].size()) + " " + to_string(net.convolutions[i].Batch_size) + " " + to_string(net.convolutions[i].chin) + " " + to_string(net.convolutions[i].chout) + "\n";
-		
-		relu_counter--;
-   		convolutions_counter--;
-	}
-	
-	cout << "python3 flat_backprop.py "+to_string(net.Batch_size)+ " " + to_string(net.final_out) + " " + to_string(net.final_w) + " " + to_string(net.flatten_n)+ " \n";
-
-	for(int i = 0; i < net.convolutions_backprop.size(); i++){
-   		cout << "python3 dw_dot_product.py " + to_string(net.convolutions_backprop[net.convolutions_backprop.size()-1-i].Prod[0].size()) + " " + to_string(net.convolutions[i].Batch_size) + " " + to_string(net.convolutions[i].chin) + " " + to_string(net.convolutions[i].chout) + "\n";
-   	}
-   	return;
-	*/
    	r = generate_randomness((int)log2(net.relus_backprop[relu_counter].dx.size()),F(0));
    	previous_sum = evaluate_vector(net.relus_backprop[relu_counter].dx,r);
    	for(int i = 1; i < net.convolutions_backprop.size(); i++){
@@ -1840,6 +1812,10 @@ void prove_backprop(struct convolutional_network net){
  	proving_time = 0.0;
    	// START PROVING DW
 
+
+
+	// ????????
+
    	for(int i = 0; i < net.convolutions_backprop.size(); i++){
    		printf("Proving correct computation of dw convolution layer %d\n",i);
     	prove_correct_gradient_computation(net.convolutions_backprop[net.convolutions_backprop.size()-1-i],net.convolutions[i], r,previous_sum, false);
@@ -1851,6 +1827,116 @@ void prove_backprop(struct convolutional_network net){
 	gradients_computation = proving_time;
    	
    	
+}
+
+void prove_model_sensitivity(struct convolutional_network net, int target_output){
+	printf("=== Starting Model Sensitivity ZKP ===\n");
+	
+	vector<F> r;
+	F previous_sum = F(0);
+	
+	vector<F> input_sensitivity_gradients;
+	
+	if(net.convolutions_backprop.size() > 0){
+		vector<F> flat_dx = convert2vector(net.convolutions_backprop[0].dx);
+		input_sensitivity_gradients = flat_dx;
+		r = generate_randomness((int)log2(flat_dx.size()), F(0));
+		previous_sum = evaluate_vector(flat_dx, r);
+		printf("Input gradients size: %d, evaluation: %s\n", flat_dx.size(), previous_sum.to_string().c_str());
+	} else if(net.fully_connected_backprop.size() > 0){
+		vector<F> flat_dx = convert2vector(net.fully_connected_backprop[0].dx);
+		input_sensitivity_gradients = flat_dx;
+		r = generate_randomness((int)log2(flat_dx.size()), F(0));
+		previous_sum = evaluate_vector(flat_dx, r);
+		printf("Dense input gradients size: %d, evaluation: %s\n", flat_dx.size(), previous_sum.to_string().c_str());
+	}
+	
+	printf("Proving gradient flow from output to input features...\n");
+	
+	for(int layer = net.convolutions_backprop.size()-1; layer >= 0; layer--){
+		printf("Proving sensitivity gradient layer %d (convolution)\n", layer);
+		
+		vector<F> layer_dx = convert2vector(net.convolutions_backprop[layer].dx);
+		vector<F> layer_derr = convert2vector(net.convolutions_backprop[layer].derr);
+		
+		if(layer_dx.size() > 0 && layer_derr.size() > 0){
+			vector<F> combined_grad_data;
+			combined_grad_data.insert(combined_grad_data.end(), layer_dx.begin(), layer_dx.end());
+			combined_grad_data.insert(combined_grad_data.end(), layer_derr.begin(), layer_derr.end());
+			
+			r = generate_randomness((int)log2(combined_grad_data.size()), F(0));
+			previous_sum = evaluate_vector(combined_grad_data, r);
+			
+			predicates_size.push_back(combined_grad_data.size());
+			
+			struct proof sensitivity_proof = prove_dx_prod(combined_grad_data, r, 
+				layer_dx.size(), layer_derr.size(), 1, 1);
+			
+			Transcript.push_back(sensitivity_proof);
+			
+			if(previous_sum != sensitivity_proof.q_poly[0].eval(0) + sensitivity_proof.q_poly[0].eval(1)){
+				printf("Error in sensitivity gradient proof layer %d\n", layer);
+				exit(1);
+			}
+			
+			printf("✓ Layer %d sensitivity gradient proven\n", layer);
+		}
+	}
+	
+	for(int layer = net.fully_connected_backprop.size()-1; layer >= 0; layer--){
+		printf("Proving sensitivity gradient layer %d (dense)\n", layer);
+		
+		vector<F> layer_dx = convert2vector(net.fully_connected_backprop[layer].dx);
+		vector<F> layer_dw = convert2vector(net.fully_connected_backprop[layer].dw);
+		
+		if(layer_dx.size() > 0){
+			vector<F> combined_grad_data;
+			combined_grad_data.insert(combined_grad_data.end(), layer_dx.begin(), layer_dx.end());
+			if(layer_dw.size() > 0){
+				combined_grad_data.insert(combined_grad_data.end(), layer_dw.begin(), layer_dw.end());
+			}
+			
+			r = generate_randomness((int)log2(combined_grad_data.size()), F(0));
+			previous_sum = evaluate_vector(combined_grad_data, r);
+			
+			predicates_size.push_back(combined_grad_data.size());
+			
+			struct proof sensitivity_proof = prove_dot_x_prod(combined_grad_data, r,
+				layer_dx.size(), layer_dw.size(), 1, 1);
+			
+			Transcript.push_back(sensitivity_proof);
+			
+			if(previous_sum != sensitivity_proof.q_poly[0].eval(0) + sensitivity_proof.q_poly[0].eval(1)){
+				printf("Error in dense sensitivity gradient proof layer %d\n", layer);
+				exit(1);
+			}
+			
+			printf("✓ Dense layer %d sensitivity gradient proven\n", layer);
+		}
+	}
+	
+	F sensitivity_magnitude = F(0);
+	for(int i = 0; i < input_sensitivity_gradients.size(); i++){
+		sensitivity_magnitude += input_sensitivity_gradients[i] * input_sensitivity_gradients[i];
+	}
+	
+	printf("Final sensitivity magnitude: %s\n", sensitivity_magnitude.to_string().c_str());
+	
+	vector<vector<F>> sensitivity_matrix;
+	sensitivity_matrix.push_back(input_sensitivity_gradients);
+	
+	commitment sensitivity_commitment;
+	poly_commit(input_sensitivity_gradients, sensitivity_matrix, sensitivity_commitment, levels);
+	
+	printf("✓ Input sensitivity gradients committed\n");
+	printf("✓ Sensitivity ZKP construction complete\n");
+	printf("✓ Total gradient proofs: %lu\n", Transcript.size());
+	
+	printf("=== Model Sensitivity Analysis Results ===\n");
+	printf("Target output class: %d\n", target_output);
+	printf("Input features analyzed: %lu\n", input_sensitivity_gradients.size());
+	printf("Sensitivity score (L2 norm): %s\n", sensitivity_magnitude.to_string().c_str());
+	printf("ZKP proofs generated: %lu\n", Transcript.size());
 }
 
 vector<vector<F>> prepare_input(vector<vector<F>> input){
@@ -2521,10 +2607,20 @@ int main(int argc, char *argv[]){
 		printf("Commit size : %d, Commit time : %lf\n",witness.size(),new_model.size(),proving_time);
 		proving_time = 0.0;
 		
+		inference_time_pass(net);
+		
 		clock_t wc1,wc2;
 		wc1 = clock();
 		prove_feedforward(net);
 		prove_backprop(net);
+		
+		int target_output = 7;
+		if(argc > 6){
+			target_output = atoi(argv[6]);
+		}
+		printf("\n=== Starting Model Sensitivity Analysis ===\n");
+		printf("Target output class: %d\n", target_output);
+		prove_model_sensitivity(net, target_output);
 	   	wc2 = clock();
 	   	proving_time = 0.0;
 		

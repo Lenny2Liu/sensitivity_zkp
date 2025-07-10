@@ -1,0 +1,9 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/liuhengyu/Desktop/kaizen/build/cmake_install.cmake",
+		"/Users/liuhengyu/Desktop/kaizen/build/src/cmake_install.cmake",
+		"/Users/liuhengyu/Desktop/kaizen/build/3rd/mcl/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

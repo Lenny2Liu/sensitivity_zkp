@@ -237,6 +237,183 @@ vector<vector<vector<vector<F>>>> init_input(int dim,int chin){
 	return in;
 }
 
+struct model_sensitivity_prover init_sensitivity_prover(struct convolutional_network net){
+	struct model_sensitivity_prover prover;
+	prover.network = net;
+	prover.is_initialized = true;
+	
+	prover.sensitivity_layers.resize(net.convolutions.size() + net.fully_connected.size() + net.relus.size());
+	
+	for(int i = 0; i < net.convolutions.size(); i++){
+		prover.sensitivity_layers[i].layer_type = 0;
+	}
+	
+	for(int i = 0; i < net.fully_connected.size(); i++){
+		prover.sensitivity_layers[net.convolutions.size() + i].layer_type = 1;
+	}
+	
+	for(int i = 0; i < net.relus.size(); i++){
+		prover.sensitivity_layers[net.convolutions.size() + net.fully_connected.size() + i].layer_type = 2;
+	}
+	
+	return prover;
+}
+
+vector<vector<F>> compute_input_gradients(struct model_sensitivity_prover* prover, vector<vector<vector<vector<F>>>> input, int target_output){
+	if(!prover->is_initialized){
+		printf("Error: Sensitivity prover not initialized\n");
+		exit(1);
+	}
+	
+	struct convolutional_network forward_net = feed_forward(input, prover->network, input[0].size());
+	
+	vector<vector<vector<vector<vector<F>>>>> output_gradients(1);
+	output_gradients[0].resize(batch);
+	for(int b = 0; b < batch; b++){
+		output_gradients[0][b].resize(forward_net.final_out);
+		for(int i = 0; i < forward_net.final_out; i++){
+			output_gradients[0][b][i].resize(1);
+			output_gradients[0][b][i][0].resize(1);
+			if(i == target_output){
+				output_gradients[0][b][i][0][0] = F(1);
+			} else {
+				output_gradients[0][b][i][0][0] = F(0);
+			}
+		}
+	}
+	
+	forward_net.der = output_gradients;
+	
+	struct convolutional_network backward_net = back_propagation(forward_net);
+	
+	vector<vector<F>> input_gradients(batch);
+	for(int b = 0; b < batch; b++){
+		input_gradients[b].resize(input[b].size() * input[b][0].size() * input[b][0][0].size());
+		int idx = 0;
+		for(int c = 0; c < input[b].size(); c++){
+			for(int h = 0; h < input[b][c].size(); h++){
+				for(int w = 0; w < input[b][c][h].size(); w++){
+					if(backward_net.convolutions_backprop.size() > 0){
+						input_gradients[b][idx] = backward_net.convolutions_backprop[0].dx[c][h*input[b][c][h].size() + w];
+					} else {
+						input_gradients[b][idx] = F(0);
+					}
+					idx++;
+				}
+			}
+		}
+	}
+	
+	prover->feature_gradients = input_gradients;
+	
+	for(int layer = 0; layer < backward_net.convolutions_backprop.size(); layer++){
+		prover->sensitivity_layers[layer].input_grads = backward_net.convolutions_backprop[layer].dx;
+		prover->sensitivity_layers[layer].weight_grads = backward_net.convolutions_backprop[layer].dw;
+		prover->sensitivity_layers[layer].output_grads = backward_net.convolutions_backprop[layer].derr;
+	}
+	
+	for(int layer = 0; layer < backward_net.fully_connected_backprop.size(); layer++){
+		int idx = backward_net.convolutions_backprop.size() + layer;
+		prover->sensitivity_layers[idx].input_grads = backward_net.fully_connected_backprop[layer].dx;
+		prover->sensitivity_layers[idx].weight_grads = backward_net.fully_connected_backprop[layer].dw;
+	}
+	
+	return input_gradients;
+}
+
+struct proof prove_gradient_layer(vector<F> input_grad, vector<F> output_grad, vector<F> weights, int layer_type){
+	vector<F> combined_data;
+	combined_data.insert(combined_data.end(), input_grad.begin(), input_grad.end());
+	combined_data.insert(combined_data.end(), output_grad.begin(), output_grad.end());
+	combined_data.insert(combined_data.end(), weights.begin(), weights.end());
+	
+	vector<F> randomness;
+	for(int i = 0; i < combined_data.size(); i++){
+		randomness.push_back(random());
+	}
+	
+	struct proof grad_proof;
+	
+	if(layer_type == 0){
+		grad_proof = prove_dx_prod(combined_data, randomness, input_grad.size(), output_grad.size(), 1, 1);
+	} else if(layer_type == 1){
+		grad_proof = prove_dot_x_prod(combined_data, randomness, input_grad.size(), output_grad.size(), 1, 1);
+	} else {
+		grad_proof = prove_relu(combined_data, randomness, input_grad.size());
+	}
+	
+	return grad_proof;
+}
+
+struct sensitivity_proof aggregate_sensitivity_proofs(vector<struct proof> layer_proofs, vector<vector<F>> gradients){
+	struct sensitivity_proof sens_proof;
+	sens_proof.layer_proofs = layer_proofs;
+	sens_proof.input_gradients = gradients;
+	
+	vector<F> flattened_gradients;
+	for(int i = 0; i < gradients.size(); i++){
+		for(int j = 0; j < gradients[i].size(); j++){
+			flattened_gradients.push_back(gradients[i][j]);
+		}
+	}
+	
+	vector<vector<F>> matrix;
+	matrix.push_back(flattened_gradients);
+	
+	poly_commit(flattened_gradients, matrix, sens_proof.gradient_commitment, 1);
+	
+	F sum = F(0);
+	for(int i = 0; i < flattened_gradients.size(); i++){
+		sum += flattened_gradients[i] * flattened_gradients[i];
+	}
+	sens_proof.final_sensitivity_eval = sum;
+	
+	return sens_proof;
+}
+
+struct sensitivity_proof prove_model_sensitivity(vector<vector<vector<vector<F>>>> input, struct convolutional_network net, int target_output){
+	struct model_sensitivity_prover prover = init_sensitivity_prover(net);
+	
+	vector<vector<F>> input_gradients = compute_input_gradients(&prover, input, target_output);
+	
+	vector<struct proof> layer_proofs;
+	
+	for(int layer = 0; layer < prover.sensitivity_layers.size(); layer++){
+		if(prover.sensitivity_layers[layer].input_grads.size() > 0 && 
+		   prover.sensitivity_layers[layer].output_grads.size() > 0){
+			
+			vector<F> flat_input, flat_output, flat_weights;
+			
+			for(int i = 0; i < prover.sensitivity_layers[layer].input_grads.size(); i++){
+				for(int j = 0; j < prover.sensitivity_layers[layer].input_grads[i].size(); j++){
+					flat_input.push_back(prover.sensitivity_layers[layer].input_grads[i][j]);
+				}
+			}
+			
+			for(int i = 0; i < prover.sensitivity_layers[layer].output_grads.size(); i++){
+				for(int j = 0; j < prover.sensitivity_layers[layer].output_grads[i].size(); j++){
+					flat_output.push_back(prover.sensitivity_layers[layer].output_grads[i][j]);
+				}
+			}
+			
+			if(prover.sensitivity_layers[layer].weight_grads.size() > 0){
+				for(int i = 0; i < prover.sensitivity_layers[layer].weight_grads.size(); i++){
+					for(int j = 0; j < prover.sensitivity_layers[layer].weight_grads[i].size(); j++){
+						flat_weights.push_back(prover.sensitivity_layers[layer].weight_grads[i][j]);
+					}
+				}
+			}
+			
+			struct proof layer_proof = prove_gradient_layer(flat_input, flat_output, flat_weights, prover.sensitivity_layers[layer].layer_type);
+			layer_proofs.push_back(layer_proof);
+		}
+	}
+	
+	struct sensitivity_proof final_proof = aggregate_sensitivity_proofs(layer_proofs, input_gradients);
+	
+	return final_proof;
+}
+
 
 vector<vector<F>> serialize(vector<vector<vector<F>>> input){
 	vector<vector<F>> x(1);
@@ -1184,8 +1361,8 @@ struct relu_layer_backprop relu_backprop(vector<F> &dx, struct relu_layer relu){
 	return relu_der;
 }
 
-
-struct dense_layer_backprop dense_backprop(vector<vector<F>> &dx,struct fully_connected_layer dense){
+// 1
+struct dense_layer_backprop dense_backprop(vector<vector<F>> &dx ,struct fully_connected_layer dense){
 	struct dense_layer_backprop dense_der;
 	dense_der.Z = dense.Z_prev;
 	dense_der.dx_input = dx;

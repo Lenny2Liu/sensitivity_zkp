@@ -1,4 +1,6 @@
 #include "config_pc.hpp"
+#include "poly_commit.h"
+#include "GKR.h"
 
 
 
@@ -153,3 +155,35 @@ struct convolution_layer conv(vector<vector<vector<vector<F>>>> input, int fchou
 struct relu_layer _relu_layer(vector<F> input);
 struct convolutional_network feed_forward(vector<vector<vector<vector<F>>>> &X, struct convolutional_network net,int channels);
 struct convolutional_network init_network(int model,int Batch_size, int channels);
+
+struct sensitivity_proof{
+	vector<vector<F>> input_gradients;
+	vector<struct proof> layer_proofs;
+	vector<F> output_values;
+	vector<F> sensitivity_values;
+	commitment gradient_commitment;
+	F final_sensitivity_eval;
+};
+
+struct sensitivity_layer{
+	int layer_type;
+	vector<vector<F>> input_grads;
+	vector<vector<F>> weight_grads;
+	vector<vector<F>> output_grads;
+	vector<F> layer_sensitivity;
+};
+
+struct model_sensitivity_prover{
+	vector<struct sensitivity_layer> sensitivity_layers;
+	vector<vector<F>> feature_gradients;
+	struct convolutional_network network;
+	vector<vector<F>> input_data;
+	vector<F> output_data;
+	bool is_initialized;
+};
+
+struct sensitivity_proof prove_model_sensitivity(vector<vector<vector<vector<F>>>> input, struct convolutional_network net, int target_output);
+struct model_sensitivity_prover init_sensitivity_prover(struct convolutional_network net);
+vector<vector<F>> compute_input_gradients(struct model_sensitivity_prover* prover, vector<vector<vector<vector<F>>>> input, int target_output);
+struct proof prove_gradient_layer(vector<F> input_grad, vector<F> output_grad, vector<F> weights, int layer_type);
+struct sensitivity_proof aggregate_sensitivity_proofs(vector<struct proof> layer_proofs, vector<vector<F>> gradients);

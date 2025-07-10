@@ -1,0 +1,2 @@
+/usr/bin/ar qc ../../lib/libmcl.a CMakeFiles/mcl_st.dir/src/fp.cpp.o
+/usr/bin/ranlib ../../lib/libmcl.a
