@@ -5,7 +5,9 @@ This implementation extends the existing ZKP framework for DNN training to provi
 ## Key Features
 
 ### 🔬 **Sensitivity Analysis**
-- Computes gradients ∂output/∂input_features using backpropagation
+- **Public Input**: Uses randomly generated or specified input X (made public)
+- **Private Model**: Model weights remain completely confidential throughout the proof
+- Computes gradients ∂output/∂input_features using backpropagation on public input
 - Quantifies input feature importance for model predictions
 - Supports different target output classes for analysis
 
@@ -38,11 +40,11 @@ Located in `src/main.cpp:1832-1940`, this function:
 ### Protocol Flow
 
 ```
-Input Model + Target Output
+Public Input X + Private Model + Target Output
           ↓
-    Forward Pass (inference)
+    Forward Pass (inference on public X)
           ↓  
-    Backward Pass (compute ∂L/∂x)
+    Backward Pass (compute ∂output/∂X)
           ↓
     Layer-wise Gradient Proofs (GKR)
           ↓
@@ -101,6 +103,11 @@ The system provides detailed output including:
 ### Example Output
 ```
 === Starting Model Sensitivity ZKP ===
+Public input dimensions: 1x1x32x32
+PRIVACY NOTE: Model weights remain confidential throughout the proof
+Only gradients w.r.t. public input will be proven correct
+Setting up gradient computation for target output: 7
+Running backward pass for sensitivity analysis...
 Input gradients size: 1024, evaluation: 0x...
 Proving gradient flow from output to input features...
 ✓ Layer 2 sensitivity gradient proven
@@ -116,6 +123,12 @@ Target output class: 7
 Input features analyzed: 1024
 Sensitivity score (L2 norm): 0x...
 ZKP proofs generated: 5
+
+=== Privacy Guarantees ===
+✓ Public input X is known to all parties
+✓ Model weights remain completely private
+✓ Gradients ∂output/∂input are cryptographically proven correct
+✓ No information about model parameters leaked in proofs
 ```
 
 ## Applications

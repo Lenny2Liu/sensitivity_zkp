@@ -2,6 +2,8 @@
 
 echo "=== Model Sensitivity ZKP Test ==="
 echo "Testing different neural network architectures with sensitivity analysis"
+echo "PUBLIC INPUT: Random input X will be generated and made public"
+echo "PRIVATE MODEL: Model weights remain confidential throughout the proof"
 echo ""
 
 # Compile the project

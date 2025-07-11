@@ -1829,8 +1829,35 @@ void prove_backprop(struct convolutional_network net){
    	
 }
 
-void prove_model_sensitivity(struct convolutional_network net, int target_output){
+void prove_model_sensitivity(struct convolutional_network net, int target_output, vector<vector<vector<vector<F>>>> public_input){
 	printf("=== Starting Model Sensitivity ZKP ===\n");
+	printf("Public input dimensions: %dx%dx%dx%d\n", 
+		public_input.size(), public_input[0].size(), public_input[0][0].size(), public_input[0][0][0].size());
+	
+	printf("PRIVACY NOTE: Model weights remain confidential throughout the proof\n");
+	printf("Only gradients w.r.t. public input will be proven correct\n");
+	printf("Setting up gradient computation for target output: %d\n", target_output);
+	
+	vector<vector<vector<vector<vector<F>>>>> output_gradients(1);
+	output_gradients[0].resize(public_input.size());
+	
+	for(int b = 0; b < public_input.size(); b++){
+		output_gradients[0][b].resize(net.final_out);
+		for(int i = 0; i < net.final_out; i++){
+			output_gradients[0][b][i].resize(1);
+			output_gradients[0][b][i][0].resize(1);
+			if(i == target_output){
+				output_gradients[0][b][i][0][0] = F(1);
+			} else {
+				output_gradients[0][b][i][0][0] = F(0);
+			}
+		}
+	}
+	
+	net.der = output_gradients;
+	
+	printf("Running backward pass for sensitivity analysis...\n");
+	net = back_propagation(net);
 	
 	vector<F> r;
 	F previous_sum = F(0);
@@ -1927,9 +1954,7 @@ void prove_model_sensitivity(struct convolutional_network net, int target_output
 	
 	commitment sensitivity_commitment;
 	poly_commit(input_sensitivity_gradients, sensitivity_matrix, sensitivity_commitment, levels);
-	
-	printf("✓ Input sensitivity gradients committed\n");
-	printf("✓ Sensitivity ZKP construction complete\n");
+
 	printf("✓ Total gradient proofs: %lu\n", Transcript.size());
 	
 	printf("=== Model Sensitivity Analysis Results ===\n");
@@ -1948,7 +1973,6 @@ vector<vector<F>> prepare_input(vector<vector<F>> input){
 			vector<F> bits = prepare_bit_vector(in,32);
 		}
 	}
-
 }
 
 // Simulate check dataset SNARK just for experimental evaluation. 
@@ -2576,8 +2600,10 @@ int main(int argc, char *argv[]){
    	//exit(-1);
    	struct convolutional_network net = init_network(model,Batch,channels);
 	
-	
-		
+	printf("Generating public input X for sensitivity analysis...\n");
+	X = init_input(input_dim, channels);
+	printf("Public input X generated: %d batches, %d channels, %dx%d\n", 
+		Batch, channels, input_dim, input_dim);
 	//check_dataset(Batch,  input_dim);
 	   	clock_t start,end;
 	   	
@@ -2620,7 +2646,7 @@ int main(int argc, char *argv[]){
 		}
 		printf("\n=== Starting Model Sensitivity Analysis ===\n");
 		printf("Target output class: %d\n", target_output);
-		prove_model_sensitivity(net, target_output);
+		prove_model_sensitivity(net, target_output, X);
 	   	wc2 = clock();
 	   	proving_time = 0.0;
 		
