@@ -6,7 +6,7 @@ CXX_DEFINES = -DMCLBN_NO_AUTOLINK -DMCL_BINT_ASM_X64=0 -DMCL_NO_AUTOLINK -Dmcl_E
 
 CXX_INCLUDES = -I/Users/liuhengyu/Desktop/kaizen/src -I/Users/liuhengyu/Desktop/kaizen/3rd -I/Users/liuhengyu/Desktop/kaizen/3rd/mcl/include -I/Users/liuhengyu/Desktop/kaizen/lib
 
-CXX_FLAGSarm64 = -w -faligned-new -lgmp -O3 -DNDEBUG -std=c++11 -arch arm64 -fPIC -Wall -Wextra -Wformat=2 -Wcast-qual -Wcast-align -Wwrite-strings -Wfloat-equal -Wpointer-arith -DNDEBUG -O3 -fPIC
+CXX_FLAGSarm64 = -w -march=native -faligned-new -mavx -lgmp -msha -O3 -DNDEBUG -std=c++11 -arch arm64 -fPIC -Wall -Wextra -Wformat=2 -Wcast-qual -Wcast-align -Wwrite-strings -Wfloat-equal -Wpointer-arith -DNDEBUG -O3 -fPIC
 
-CXX_FLAGS = -w -faligned-new -lgmp -O3 -DNDEBUG -std=c++11 -arch arm64 -fPIC -Wall -Wextra -Wformat=2 -Wcast-qual -Wcast-align -Wwrite-strings -Wfloat-equal -Wpointer-arith -DNDEBUG -O3 -fPIC
+CXX_FLAGS = -w -march=native -faligned-new -mavx -lgmp -msha -O3 -DNDEBUG -std=c++11 -arch arm64 -fPIC -Wall -Wextra -Wformat=2 -Wcast-qual -Wcast-align -Wwrite-strings -Wfloat-equal -Wpointer-arith -DNDEBUG -O3 -fPIC
 

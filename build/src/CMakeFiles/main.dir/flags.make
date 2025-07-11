@@ -7,15 +7,15 @@ C_DEFINES = -DMCLBN_NO_AUTOLINK -DMCL_BINT_ASM_X64=0 -DMCL_NO_AUTOLINK
 
 C_INCLUDES = -I/Users/liuhengyu/Desktop/kaizen/src -I/Users/liuhengyu/Desktop/kaizen/3rd -I/Users/liuhengyu/Desktop/kaizen/3rd/mcl/include -I/Users/liuhengyu/Desktop/kaizen/lib -I/Users/liuhengyu/Desktop/kaizen/src/.
 
-C_FLAGSarm64 = -w -faligned-new -lgmp -O3 -DNDEBUG -arch arm64
+C_FLAGSarm64 = -w -march=native -faligned-new -mavx -lgmp -msha -O3 -DNDEBUG -arch arm64
 
-C_FLAGS = -w -faligned-new -lgmp -O3 -DNDEBUG -arch arm64
+C_FLAGS = -w -march=native -faligned-new -mavx -lgmp -msha -O3 -DNDEBUG -arch arm64
 
 CXX_DEFINES = -DMCLBN_NO_AUTOLINK -DMCL_BINT_ASM_X64=0 -DMCL_NO_AUTOLINK
 
 CXX_INCLUDES = -I/Users/liuhengyu/Desktop/kaizen/src -I/Users/liuhengyu/Desktop/kaizen/3rd -I/Users/liuhengyu/Desktop/kaizen/3rd/mcl/include -I/Users/liuhengyu/Desktop/kaizen/lib -I/Users/liuhengyu/Desktop/kaizen/src/.
 
-CXX_FLAGSarm64 = -w -faligned-new -lgmp -O3 -DNDEBUG -std=gnu++14 -arch arm64
+CXX_FLAGSarm64 = -w -march=native -faligned-new -mavx -lgmp -msha -O3 -DNDEBUG -std=gnu++14 -arch arm64
 
-CXX_FLAGS = -w -faligned-new -lgmp -O3 -DNDEBUG -std=gnu++14 -arch arm64
+CXX_FLAGS = -w -march=native -faligned-new -mavx -lgmp -msha -O3 -DNDEBUG -std=gnu++14 -arch arm64
 
