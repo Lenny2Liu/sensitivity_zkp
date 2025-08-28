@@ -153,3 +153,4 @@ struct convolution_layer conv(vector<vector<vector<vector<F>>>> input, int fchou
 struct relu_layer _relu_layer(vector<F> input);
 struct convolutional_network feed_forward(vector<vector<vector<vector<F>>>> &X, struct convolutional_network net,int channels);
 struct convolutional_network init_network(int model,int Batch_size, int channels);
+vector<vector<vector<vector<F>>>> init_input(int dim,int chin);

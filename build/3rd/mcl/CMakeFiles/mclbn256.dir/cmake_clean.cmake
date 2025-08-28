@@ -1,9 +1,9 @@
 file(REMOVE_RECURSE
   "../../lib/.1"
-  "../../lib/libmclbn256.1.73.dylib"
-  "../../lib/libmclbn256.1.dylib"
-  "../../lib/libmclbn256.dylib"
   "../../lib/libmclbn256.pdb"
+  "../../lib/libmclbn256.so"
+  "../../lib/libmclbn256.so.1"
+  "../../lib/libmclbn256.so.1.73"
   "CMakeFiles/mclbn256.dir/src/bn_c256.cpp.o"
   "CMakeFiles/mclbn256.dir/src/bn_c256.cpp.o.d"
 )

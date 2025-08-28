@@ -906,6 +906,63 @@ void prove_shift(vector<vector<F>> quotient,vector<vector<F>> remainder,vector<v
 }
 
 
+// void prove_shift(vector<vector<F>> quotient,vector<vector<F>> remainder,vector<vector<F>> divident, vector<F> &r, F &previous_sum){
+// 	printf("  >>> PROVE_SHIFT START <<<\n");
+// 	printf("  Input: r.size()=%lu, previous_sum=%s\n", r.size(), previous_sum.toString());
+// 	printf("  Data sizes: quotient=%lux%lu, remainder=%lux%lu, divident=%lux%lu\n", 
+// 		quotient.size(), quotient.size() > 0 ? quotient[0].size() : 0,
+// 		remainder.size(), remainder.size() > 0 ? remainder[0].size() : 0,
+// 		divident.size(), divident.size() > 0 ? divident[0].size() : 0);
+		
+// 	F divisor = F(1<<Q);
+// 	// printf("  Divisor: 1<<%d = %s\n", Q, divisor.toString());
+	
+// 	vector<F> range_proof_data = convert2vector(remainder);
+// 	clock_t start,end;
+// 	start = clock();
+// 	F remainder_sum = evaluate_vector(convert2vector(remainder),r);
+// 	F divident_sum = evaluate_vector(convert2vector(divident),r);
+// 	end = clock();
+// 	proving_time += (float)(end-start)/(float)CLOCKS_PER_SEC;
+
+// 	// printf("  Shift verification:\n");
+// 	// printf("    remainder_sum = %s\n", remainder_sum.toString());
+// 	// printf("    divident_sum = %s\n", divident_sum.toString());
+// 	// printf("    previous_sum*divisor = %s\n", (previous_sum*divisor).toString());
+// 	// printf("    remainder_sum + previous_sum*divisor = %s\n", (remainder_sum + previous_sum*divisor).toString());
+// 	// printf("    Match: %s\n", (divident_sum == remainder_sum + previous_sum*divisor) ? "YES" : "NO");
+
+// 	// if(divident_sum != remainder_sum + previous_sum*divisor){
+// 	// 	printf("  ERROR: Shift verification failed!\n");
+// 	// 	printf("  Expected: %s\n", (remainder_sum + previous_sum*divisor).toString());
+// 	// 	printf("  Got: %s\n", divident_sum.toString());
+// 	// 	printf("Error in shift\n");
+// 	// 	exit(-1);
+// 	// }
+// 	struct proof P;
+// 	P.type = DIVISION_CHECK;
+// 	P.divisor = divisor;
+// 	P.divident = divident_sum;
+// 	P.remainder = remainder_sum;
+// 	P.quotient = previous_sum;
+// 	Transcript.push_back(P);
+// 	for(int i = 0; i < range_proof_data.size(); i++){
+// 		range_proof_data[i] = divisor - range_proof_data[i];
+// 	}
+
+// 	//prove_bit_decomposition(prepare_bit_vector(range_proof_data,32),range_proof_data,32);
+
+// 	lookup_proof rP = lookup_range_proof(range_proof_data,r,divisor-remainder_sum,32);
+// 	Transcript.push_back(rP.mP1);
+// 	Transcript.push_back(rP.mP2);
+// 	Transcript.push_back(rP.sP1);
+// 	//Transcript.push_back(_prove_bit_decomposition(prepare_bit_vector(range_proof_data,32),r,divisor- remainder_sum,32));
+// 	previous_sum = divident_sum;
+
+// }
+
+
+
 void prove_flattening(struct convolutional_network net, vector<F> &r, F &previous_sum){
 	struct proof Pr;
 	string filename = "flatten" ;
@@ -1703,10 +1760,9 @@ void prove_correct_gradient_computation(struct convolution_layer_backprop conv_b
 
 // Simply prove the matrix2matrix multiplication 
 // Z_{i} = WZ_{i-1}
-void prove_dense_backprop(struct dense_layer_backprop dense_backprop, vector<F> &r, F &previous_sum){
+void prove_dense_backprop(struct dense_layer_backprop dense_backprop, vector<F> &r, F &previous_sum, bool useshift=true){
 
-
-	prove_shift(dense_backprop.dx,dense_backprop.dx_remainders,dense_backprop.dx_temp,r,previous_sum);
+	if (useshift) prove_shift(dense_backprop.dx,dense_backprop.dx_remainders,dense_backprop.dx_temp,r,previous_sum);
 
 	struct proof P = _prove_matrix2matrix((dense_backprop.dx_input),transpose(dense_backprop.W),r,previous_sum);
 	Transcript.push_back(P);
@@ -1747,6 +1803,21 @@ void flat_layer(struct convolutional_network net, struct convolution_layer_backp
 		exit(-1);
 	} 
 	previous_sum = evaluate_vector(relu_backprop.dx,r);
+}
+
+static vector<F> flatten(const vector<vector<F>>& vv)
+{
+    vector<F> out;
+    for (const auto& row : vv) out.insert(out.end(), row.begin(), row.end());
+    return out;
+}
+
+static int ceil_log2(size_t n)
+{
+    int bits = 0;
+    size_t p = 1;
+    while (p < n) { p <<= 1; ++bits; }
+    return bits;
 }
 
 void prove_backprop(struct convolutional_network net){
@@ -1812,10 +1883,6 @@ void prove_backprop(struct convolutional_network net){
  	proving_time = 0.0;
    	// START PROVING DW
 
-
-
-	// ????????
-
    	for(int i = 0; i < net.convolutions_backprop.size(); i++){
    		printf("Proving correct computation of dw convolution layer %d\n",i);
     	prove_correct_gradient_computation(net.convolutions_backprop[net.convolutions_backprop.size()-1-i],net.convolutions[i], r,previous_sum, false);
@@ -1829,150 +1896,173 @@ void prove_backprop(struct convolutional_network net){
    	
 }
 
-void prove_model_sensitivity(struct convolutional_network net, int target_output, vector<vector<vector<vector<F>>>> public_input){
-	printf("=== Starting Model Sensitivity ZKP ===\n");
-	printf("Public input dimensions: %dx%dx%dx%d\n", 
-		public_input.size(), public_input[0].size(), public_input[0][0].size(), public_input[0][0][0].size());
-	
-	printf("PRIVACY NOTE: Model weights remain confidential throughout the proof\n");
-	printf("Only gradients w.r.t. public input will be proven correct\n");
-	printf("Setting up gradient computation for target output: %d\n", target_output);
-	
-	vector<vector<vector<vector<vector<F>>>>> output_gradients(1);
-	output_gradients[0].resize(public_input.size());
-	
-	for(int b = 0; b < public_input.size(); b++){
-		output_gradients[0][b].resize(net.final_out);
-		for(int i = 0; i < net.final_out; i++){
-			output_gradients[0][b][i].resize(1);
-			output_gradients[0][b][i][0].resize(1);
-			if(i == target_output){
-				output_gradients[0][b][i][0][0] = F(1);
-			} else {
-				output_gradients[0][b][i][0][0] = F(0);
-			}
-		}
-	}
-	
-	net.der = output_gradients;
-	
-	printf("Running backward pass for sensitivity analysis...\n");
-	net = back_propagation(net);
-	
-	vector<F> r;
-	F previous_sum = F(0);
-	
-	vector<F> input_sensitivity_gradients;
-	
-	if(net.convolutions_backprop.size() > 0){
-		vector<F> flat_dx = convert2vector(net.convolutions_backprop[0].dx);
-		input_sensitivity_gradients = flat_dx;
-		r = generate_randomness((int)log2(flat_dx.size()), F(0));
-		previous_sum = evaluate_vector(flat_dx, r);
-		printf("Input gradients size: %d, evaluation: %s\n", flat_dx.size(), previous_sum.to_string().c_str());
-	} else if(net.fully_connected_backprop.size() > 0){
-		vector<F> flat_dx = convert2vector(net.fully_connected_backprop[0].dx);
-		input_sensitivity_gradients = flat_dx;
-		r = generate_randomness((int)log2(flat_dx.size()), F(0));
-		previous_sum = evaluate_vector(flat_dx, r);
-		printf("Dense input gradients size: %d, evaluation: %s\n", flat_dx.size(), previous_sum.to_string().c_str());
-	}
-	
-	printf("Proving gradient flow from output to input features...\n");
-	
-	for(int layer = net.convolutions_backprop.size()-1; layer >= 0; layer--){
-		printf("Proving sensitivity gradient layer %d (convolution)\n", layer);
-		
-		vector<F> layer_dx = convert2vector(net.convolutions_backprop[layer].dx);
-		vector<F> layer_derr = convert2vector(net.convolutions_backprop[layer].derr);
-		
-		if(layer_dx.size() > 0 && layer_derr.size() > 0){
-			vector<F> combined_grad_data;
-			combined_grad_data.insert(combined_grad_data.end(), layer_dx.begin(), layer_dx.end());
-			combined_grad_data.insert(combined_grad_data.end(), layer_derr.begin(), layer_derr.end());
-			
-			r = generate_randomness((int)log2(combined_grad_data.size()), F(0));
-			previous_sum = evaluate_vector(combined_grad_data, r);
-			
-			predicates_size.push_back(combined_grad_data.size());
-			
-			struct proof sensitivity_proof = prove_dx_prod(combined_grad_data, r, 
-				layer_dx.size(), layer_derr.size(), 1, 1);
-			
-			Transcript.push_back(sensitivity_proof);
-			
-			if(previous_sum != sensitivity_proof.q_poly[0].eval(0) + sensitivity_proof.q_poly[0].eval(1)){
-				printf("Error in sensitivity gradient proof layer %d\n", layer);
-				exit(1);
-			}
-			
-			printf("✓ Layer %d sensitivity gradient proven\n", layer);
-		}
-	}
-	
-	for(int layer = net.fully_connected_backprop.size()-1; layer >= 0; layer--){
-		printf("Proving sensitivity gradient layer %d (dense)\n", layer);
-		
-		vector<F> layer_dx = convert2vector(net.fully_connected_backprop[layer].dx);
-		vector<F> layer_dw = convert2vector(net.fully_connected_backprop[layer].dw);
-		
-		if(layer_dx.size() > 0){
-			vector<F> combined_grad_data;
-			combined_grad_data.insert(combined_grad_data.end(), layer_dx.begin(), layer_dx.end());
-			if(layer_dw.size() > 0){
-				combined_grad_data.insert(combined_grad_data.end(), layer_dw.begin(), layer_dw.end());
-			}
-			
-			r = generate_randomness((int)log2(combined_grad_data.size()), F(0));
-			previous_sum = evaluate_vector(combined_grad_data, r);
-			
-			predicates_size.push_back(combined_grad_data.size());
-			
-			struct proof sensitivity_proof = prove_dot_x_prod(combined_grad_data, r,
-				layer_dx.size(), layer_dw.size(), 1, 1);
-			
-			Transcript.push_back(sensitivity_proof);
-			
-			if(previous_sum != sensitivity_proof.q_poly[0].eval(0) + sensitivity_proof.q_poly[0].eval(1)){
-				printf("Error in dense sensitivity gradient proof layer %d\n", layer);
-				exit(1);
-			}
-			
-			printf("✓ Dense layer %d sensitivity gradient proven\n", layer);
-		}
-	}
-	
-	F sensitivity_magnitude = F(0);
-	for(int i = 0; i < input_sensitivity_gradients.size(); i++){
-		sensitivity_magnitude += input_sensitivity_gradients[i] * input_sensitivity_gradients[i];
-	}
-	
-	printf("Final sensitivity magnitude: %s\n", sensitivity_magnitude.to_string().c_str());
-	
-	vector<vector<F>> sensitivity_matrix;
-	sensitivity_matrix.push_back(input_sensitivity_gradients);
-	
-	commitment sensitivity_commitment;
-	poly_commit(input_sensitivity_gradients, sensitivity_matrix, sensitivity_commitment, levels);
+void prove_model_sensitivity(struct convolutional_network net,
+                             int                            target_output,
+                             vector<vector<vector<vector<F>>>> public_input)
+{
+    printf("=== Starting Model Sensitivity ZKP (Inference Time) ===\n");
+    printf("Public input dimensions: %dx%dx%dx%d\n",
+           public_input.size(), public_input[0].size(),
+           public_input[0][0].size(), public_input[0][0][0].size());
 
-	printf("✓ Total gradient proofs: %lu\n", Transcript.size());
-	
-	printf("=== Model Sensitivity Analysis Results ===\n");
-	printf("Target output class: %d\n", target_output);
-	printf("Input features analyzed: %lu\n", input_sensitivity_gradients.size());
-	printf("Sensitivity score (L2 norm): %s\n", sensitivity_magnitude.to_string().c_str());
-	printf("ZKP proofs generated: %lu\n", Transcript.size());
-}
+    printf("=== STEP 1: Proving Forward Pass Inference ===\n");
+    struct proof                 P;
+    int                          relu_counter = net.relus.size() - 1;
+    vector<F>                    r;
+    F                            previous_sum;
+    prove_lookup(net.Batch_size, 16);
 
-vector<vector<F>> prepare_input(vector<vector<F>> input){
-	F num;
-	vector<F> in;
-	for(int i = 0; i < input.size(); i++){
-		for(int j = 0; j < input[i].size(); j++){
-			in.push_back(input[i][j]);
-			vector<F> bits = prepare_bit_vector(in,32);
+    // Dense forward
+    printf("=== Dense Layers Forward Pass ===\n");
+    for (int i = net.fully_connected.size() - 1; i >= 0; --i) {
+        auto &mlp = net.fully_connected[i];
+        printf("Dense layer %d forward pass\n", i);
+        if (i == net.fully_connected.size() - 1) {
+            r = generate_randomness(
+                    (int)log2(convert2vector(mlp.Z_new).size()), F(0));
+            previous_sum = evaluate_vector(convert2vector(mlp.Z_new), r);
+        }
+        P = _prove_matrix2matrix(mlp.Z_prev, mlp.W, r, previous_sum);
+        Transcript.push_back(P);
+        previous_sum = P.vr[0];
+        r.clear();
+        r.insert(r.end(), P.randomness[0].begin(), P.randomness[0].end());
+        r.insert(r.end(), P.randomness[1].begin(), P.randomness[1].end());
+
+        if (evaluate_vector(net.relus[relu_counter].output, r) != previous_sum) {
+            printf("Error in dense forward pass\n");
+            exit(-1);
+        }
+        prove_relu(net.relus[relu_counter], r, previous_sum);
+        --relu_counter;
+        printf("Dense layer %d inference verified\n", i);
+    }
+
+    printf("=== Convolution Layers Forward Pass ===\n");
+    prove_flattening(net, r, previous_sum);
+    prove_convolution(net.convolutions.back(), r, previous_sum, false);
+    for (int i = (int)net.convolutions.size() - 2; i >= 0; --i) {
+        prove_avg(net.avg_layers[i], r, previous_sum, net.convolution_pooling[i]);
+        prove_relu(net.relus[relu_counter], r, previous_sum);
+        --relu_counter;
+        prove_convolution(net.convolutions[i], r, previous_sum, true);
+        printf("Convolution layer %d inference verified\n", i);
+    }
+    printf("Forward pass inference proven successfully\n");
+
+	std::vector<int> feature_idx = {0, 5, 6}; 
+
+	printf("=== Network Structure Analysis ===\n");
+	printf("Convolution layers: %lu\n", net.convolutions.size());
+	printf("Convolution backprop layers: %lu\n", net.convolutions_backprop.size());
+	printf("ReLU layers: %lu\n", net.relus.size());
+	printf("ReLU backprop layers: %lu\n", net.relus_backprop.size());
+	printf("Dense layers: %lu\n", net.Weights.size());
+	printf("Dense backprop layers: %lu\n", net.fully_connected_backprop.size());
+	printf("Avg pooling layers: %lu\n", net.avg_layers.size());
+	printf("Avg backprop layers: %lu\n", net.avg_backprop.size());
+	printf("Derivative dimensions: %lu\n", net.der.size());
+	printf("Final output size: %d\n", net.final_out);
+	printf("===================================\n");
+
+    std::vector<std::vector<F>> C_columns(feature_idx.size());
+	printf("the size of the output is %d \n",net.final_out);
+    for (int j = 0; j < net.final_out; ++j) {
+		printf("Current Progress: %d \n ", j);
+        vector<vector<vector<vector<vector<F>>>>> seed(1);
+        seed[0].resize(public_input.size());
+        for (int b = 0; b < public_input.size(); ++b) {
+            seed[0][b].resize(net.final_out);
+            for (int t = 0; t < net.final_out; ++t) {
+                seed[0][b][t].resize(1);
+                seed[0][b][t][0].resize(1);
+                seed[0][b][t][0][0] = (t == j ? F(1) : F(0));
+            }
+        }
+        net.der = seed;
+
+        net.convolutions_backprop.clear(); net.avg_backprop.clear();
+        net.relus_backprop.clear();        net.fully_connected_backprop.clear();
+        net.der.clear(); net.der_dim.clear(); net.w.clear();
+        net = back_propagation(net);
+
+		int relu_idx = (int)net.relus_backprop.size() - 1;
+		int avg_idx  = (int)net.avg_backprop.size()   - 1;
+		int conv_bp  = (int)net.convolutions_backprop.size() - 2;
+
+		r = generate_randomness(
+					(int)log2(net.relus_backprop[relu_idx].dx.size()),
+					F(0));
+		F prev_sum  = evaluate_vector(net.relus_backprop[relu_idx].dx, r);
+
+		for (int i=1;i<(int)net.convolutions_backprop.size();++i){
+			// printf("convolution proof\n");
+			prove_relu_backprop(net.relus_backprop[relu_idx], r, prev_sum);
+			if(net.convolution_pooling[i-1]){
+				prove_avg_backprop(net.avg_backprop[avg_idx],
+								net.convolutions[i],
+								net.convolutions_backprop[conv_bp],
+								r, prev_sum, /*final=*/false);
+				--avg_idx;
+			}
+			prove_convolution_backprop(net.convolutions_backprop[conv_bp],
+									net.convolutions[i],
+									r, prev_sum, /*first=*/false);
+			--relu_idx; --conv_bp;
 		}
-	}
+		if(avg_idx==0){
+			prove_avg_backprop(net.avg_backprop[0],
+							net.convolutions.back(),
+							net.convolutions_backprop[0],
+							r, prev_sum, /*final=*/false);
+		}
+		flat_layer(net,
+				net.convolutions_backprop[0],
+				net.relus_backprop[relu_idx],
+				r, prev_sum);
+
+		// printf("size of layers %d\n", net.Weights.size());
+		for (int d = static_cast<int>(net.Weights.size()) - 1; d >= 0; d--)
+		{
+			const auto &relu_bp = net.relus_backprop[relu_idx];
+			// printf("the size of relu vec is %llu\n", relu_bp.dx.size());
+			int bits_relu = std::log2(relu_bp.dx.size());  
+			r        = generate_randomness(bits_relu, F(0));
+			prev_sum = evaluate_vector(relu_bp.dx, r);
+			prove_relu_backprop(relu_bp, r, prev_sum);
+			--relu_idx;
+
+			const auto &dense_bp = net.fully_connected_backprop[d];
+			vector<F> vec = flatten(dense_bp.dx_temp);
+			// printf("the size of the vector is %lu\n", vec.size());
+			int bits_dense = ceil_log2(vec.size());
+			r        = generate_randomness(bits_dense, F(0));
+			prev_sum = evaluate_vector(vec, r);
+			prove_dense_backprop(dense_bp, r, prev_sum, false);
+		}
+        std::vector<F> row = convert2vector(
+                 net.convolutions_backprop.empty()
+                 ? net.fully_connected_backprop[0].dx
+                 : net.convolutions_backprop[0].dx);
+        for (size_t s = 0; s < feature_idx.size(); ++s)
+            C_columns[s].push_back(row[feature_idx[s]]);
+    }
+    std::vector<F> C_flat;
+    for (const auto& col : C_columns)
+        C_flat.insert(C_flat.end(), col.begin(), col.end());
+	size_t pow2 = 1ULL << ceil_log2(C_flat.size());
+    C_flat.resize(pow2, F(0));
+    int bitsC = ceil_log2(C_flat.size());
+    commitment C_comm;
+    std::vector<std::vector<F>> C_mat(1, C_flat);
+	std::cout << "inside poly commit" << std::endl;
+    poly_commit(C_flat, C_mat, C_comm, levels);     
+	std::cout << "pass poly commit" << std::endl;   
+    std::vector<F> r_ = generate_randomness(bitsC, F(0));
+    F s_check = evaluate_vector(C_flat, r_);
+	printf("C_flat size: %zu, bits: %d, r_ size: %zu\n",
+		   C_flat.size(), bitsC, r_.size());
+    assert(evaluate_vector(C_flat, r_) == s_check);
 }
 
 // Simulate check dataset SNARK just for experimental evaluation. 
@@ -2598,6 +2688,7 @@ int main(int argc, char *argv[]){
 	//test_aggregation(levels,channels);
 	//printf("Batch size : %d\n", Batch);
    	//exit(-1);
+	// need to load a pre-trained NN
    	struct convolutional_network net = init_network(model,Batch,channels);
 	
 	printf("Generating public input X for sensitivity analysis...\n");
@@ -2633,12 +2724,10 @@ int main(int argc, char *argv[]){
 		printf("Commit size : %d, Commit time : %lf\n",witness.size(),new_model.size(),proving_time);
 		proving_time = 0.0;
 		
-		inference_time_pass(net);
-		
 		clock_t wc1,wc2;
 		wc1 = clock();
-		prove_feedforward(net);
-		prove_backprop(net);
+		// prove_feedforward(net);
+		// prove_backprop(net);
 		
 		int target_output = 7;
 		if(argc > 6){
