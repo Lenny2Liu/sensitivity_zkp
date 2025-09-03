@@ -1840,6 +1840,8 @@ void prove_backprop(struct convolutional_network net){
    	
    	
 }
+
+
 void prove_model_sensitivity(struct convolutional_network net,
                              int                            target_output,
                              vector<vector<vector<vector<F>>>> public_input)
@@ -1874,11 +1876,6 @@ void prove_model_sensitivity(struct convolutional_network net,
             exit(-1);
         }
         auto relu_proofs = prove_relu(net.relus[relu_counter], r, previous_sum);
-        if (relu_proofs.size() >= 3) {
-            // P1 已在 prove_relu 内 push；此处补齐 P2、P3
-            Transcript.push_back(relu_proofs[1]);
-            Transcript.push_back(relu_proofs[2]);
-        }
         --relu_counter;
     }
     prove_flattening(net, r, previous_sum);
@@ -1887,10 +1884,6 @@ void prove_model_sensitivity(struct convolutional_network net,
     for (int i = (int)net.convolutions.size() - 2; i >= 0; --i) {
         prove_avg(net.avg_layers[i], r, previous_sum, net.convolution_pooling[i]);
         auto relu_proofs = prove_relu(net.relus[relu_counter], r, previous_sum);
-        if (relu_proofs.size() >= 3) {
-            Transcript.push_back(relu_proofs[1]);
-            Transcript.push_back(relu_proofs[2]);
-        }
         --relu_counter;
         prove_convolution(net.convolutions[i], r, previous_sum, /*avg=*/true);
     }
@@ -1953,7 +1946,7 @@ void prove_model_sensitivity(struct convolutional_network net,
                 prove_avg_backprop(net.avg_backprop[avg_idx],
                                    net.convolutions[i],
                                    net.convolutions_backprop[conv_bp],
-                                   r, prev_sum, /*final_avg=*/false);
+                                   r, prev_sum, false);
                 --avg_idx;
             }
 
@@ -1966,7 +1959,7 @@ void prove_model_sensitivity(struct convolutional_network net,
             prove_avg_backprop(net.avg_backprop[0],
                                net.convolutions.back(),
                                net.convolutions_backprop[0],
-                               r, prev_sum, /*final_avg=*/false);
+                               r, prev_sum, false);
         }
 
         flat_layer(net,
@@ -1977,7 +1970,7 @@ void prove_model_sensitivity(struct convolutional_network net,
         for (int d = (int)net.Weights.size() - 1; d >= 0; --d) {
             prove_relu_backprop(net.relus_backprop[relu_idx], r, prev_sum);
             --relu_idx;
-            prove_dense_backprop(net.fully_connected_backprop[d], r, prev_sum); // useshift 默认
+            prove_dense_backprop(net.fully_connected_backprop[d], r, prev_sum);
         }
 
         vector<F> row = convert2vector(
