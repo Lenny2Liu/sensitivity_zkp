@@ -1841,16 +1841,11 @@ void prove_backprop(struct convolutional_network net){
    	
 }
 
-
 void prove_model_sensitivity(struct convolutional_network net,
                              int                            target_output,
                              vector<vector<vector<vector<F>>>> public_input)
 {
-    printf("Public input dimensions: %d x %d x %d x %d\n",
-           (int)public_input.size(),
-           (int)public_input[0].size(),
-           (int)public_input[0][0].size(),
-           (int)public_input[0][0][0].size());
+    int feature_index = target_output;
     struct proof P;
     int relu_counter = (int)net.relus.size() - 1;
     vector<F> r;
@@ -1879,39 +1874,19 @@ void prove_model_sensitivity(struct convolutional_network net,
         --relu_counter;
     }
     prove_flattening(net, r, previous_sum);
-    prove_convolution(net.convolutions.back(), r, previous_sum, /*avg=*/false);
+    prove_convolution(net.convolutions.back(), r, previous_sum, false);
 
     for (int i = (int)net.convolutions.size() - 2; i >= 0; --i) {
         prove_avg(net.avg_layers[i], r, previous_sum, net.convolution_pooling[i]);
         auto relu_proofs = prove_relu(net.relus[relu_counter], r, previous_sum);
         --relu_counter;
-        prove_convolution(net.convolutions[i], r, previous_sum, /*avg=*/true);
+        prove_convolution(net.convolutions[i], r, previous_sum, true);
     }
 
-    vector<int> outputs_to_prove;
-    if (0 <= target_output && target_output < net.final_out) {
-        outputs_to_prove = { target_output };
-        printf("Proving sensitivity for target output only: %d\n", target_output);
-    } else {
-        outputs_to_prove.resize(net.final_out);
-        for (int j = 0; j < net.final_out; ++j) outputs_to_prove[j] = j;
-        printf("Proving sensitivity for ALL %d outputs.\n", net.final_out);
-    }
-    const vector<int> feature_idx = {0, 5, 6};
+    vector<F> C_flat;
+    C_flat.reserve(net.final_out);
 
-    printf("=== Network Structure (for sensitivity) ===\n");
-    printf("Conv: %zu, Conv-bp: %zu, ReLU: %zu, ReLU-bp: %zu\n",
-           net.convolutions.size(), net.convolutions_backprop.size(),
-           net.relus.size(), net.relus_backprop.size());
-    printf("Dense: %zu, Dense-bp: %zu, Avg: %zu, Avg-bp: %zu, Final out: %d\n",
-           net.Weights.size(), net.fully_connected_backprop.size(),
-           net.avg_layers.size(), net.avg_backprop.size(),
-           net.final_out);
-    printf("==========================================\n");
-
-    vector<vector<F>> C_columns(feature_idx.size());
-
-    for (int j : outputs_to_prove) {
+    for (int j = 0; j < net.final_out; ++j) {
         vector<vector<vector<vector<vector<F>>>>> seed(1);
         seed[0].resize(public_input.size());
         for (int b = 0; b < (int)public_input.size(); ++b) {
@@ -1952,7 +1927,7 @@ void prove_model_sensitivity(struct convolutional_network net,
 
             prove_convolution_backprop(net.convolutions_backprop[conv_bp],
                                        net.convolutions[i],
-                                       r, prev_sum, /*first=*/false);
+                                       r, prev_sum, false);
             --relu_idx; --conv_bp;
         }
         if (avg_idx == 0) {
@@ -1978,20 +1953,14 @@ void prove_model_sensitivity(struct convolutional_network net,
                 ? net.fully_connected_backprop[0].dx
                 : net.convolutions_backprop[0].dx);
 
-        for (size_t s = 0; s < feature_idx.size(); ++s) {
-            int idx = feature_idx[s];
-            if (idx < 0 || idx >= (int)row.size()) {
-                printf("feature_idx out of range: %d (row size %d)\n", idx, (int)row.size());
-                exit(-1);
-            }
-            C_columns[s].push_back(row[idx]);
+        if (feature_index < 0 || feature_index >= (int)row.size()) {
+            printf("feature_index out of range: %d (row size %d)\n", feature_index, (int)row.size());
+            exit(-1);
         }
+        C_flat.push_back(row[feature_index]);
     }
-    vector<F> C_flat;
-    for (const auto& col : C_columns)
-        C_flat.insert(C_flat.end(), col.begin(), col.end());
 
-    size_t pow2 = 1ULL << ceil_log2(C_flat.size());
+    size_t pow2 = 1ULL << ceil_log2(std::max<size_t>(1, C_flat.size()));
     C_flat.resize(pow2, F(0));
 
     commitment C_comm;
@@ -2012,9 +1981,8 @@ void prove_model_sensitivity(struct convolutional_network net,
         exit(-1);
     }
     Transcript.push_back(P_eval);
-
-    printf("C_flat size (padded): %zu, eval bits: %d\n", C_flat.size(), bitsC);
 }
+
 
 // Simulate check dataset SNARK just for experimental evaluation. 
 // To be fixed in the future
