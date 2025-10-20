@@ -902,22 +902,10 @@ void check_relu(vector<vector<vector<vector<F>>>> &input){
 }
 
 struct convolutional_network feed_forward(vector<vector<vector<vector<F>>>> &X, struct convolutional_network net, int channels){
-	vector<vector<vector<vector<F>>>> input;
-	if(model == VGG){
-		input = init_input(64,channels);
-	}
-	else if(model == AlexNet || model == mAlexNet){
-		input = init_input(64,channels);
-	}	
-	else{
-		input = init_input(32,channels);
-	}
-	
 	vector<vector<vector<vector<F>>>> Z_conv;
 	vector<vector<F>> Z(batch);
 	vector<vector<vector<vector<F>>>> real_input;
-	real_input = input;
-	X = input;
+	real_input = X;
 	struct convolution_layer conv_data;
 	struct fully_connected_layer mlp_data;
 	struct relu_layer relu_data;
@@ -1230,6 +1218,16 @@ struct convolution_layer_backprop conv_backprop(vector<vector<vector<vector<F>>>
 	//conv_data.fft_X = conv.fft_X;
 	//conv_data.fft_X.resize(conv.X.size());
 	//printf("FFT SIZE : %d\n",conv.X[0].size()*conv.X.size() );
+	static int conv_debug = 0;
+	if ((conv.idx == 0 || conv_debug == 0) && !derr.empty() && !derr[0].empty() && !derr[0][0].empty()) {
+		printf("conv idx %d derr sample:", conv.idx);
+		for (int dbg = 0; dbg < 8 && dbg < (int)derr[0][0][0].size(); ++dbg) {
+			printf(" %lld", derr[0][0][0][dbg].toint128());
+		}
+		printf("\n");
+	}
+	conv_debug++;
+
 	for(int i = 0; i < conv.X.size(); i++){
 		conv_data.fft_X.push_back(conv.fft_X[i]);
 		//conv_data.fft_X[i].resize(2*conv_data.fft_X[i].size(),F(0));
@@ -1394,13 +1392,20 @@ struct convolution_layer_backprop conv_backprop(vector<vector<vector<vector<F>>>
 		}
 		// Compute IFFT
 		conv_data.U_dx.resize(batch*conv.chin);
-		for(int i = 0; i < conv_data.U_dx.size(); i++){
-			vector<F> u = conv_data.Prod_dx[i];
-			fft(u,(int)log2(u.size()),true);
-			for(int j = 0; j < u.size()/2; j++){
-				conv_data.U_dx[i].push_back(u[j]);
-			}
+	for(int i = 0; i < conv_data.U_dx.size(); i++){
+		vector<F> u = conv_data.Prod_dx[i];
+		fft(u,(int)log2(u.size()),true);
+		for(int j = 0; j < u.size()/2; j++){
+			conv_data.U_dx[i].push_back(u[j]);
 		}
+	}
+	if ((conv.idx == 0 || conv_debug == 1) && !conv_data.U_dx.empty()) {
+		printf("conv idx %d U_dx sample:", conv.idx);
+		for (int dbg = 0; dbg < 8 && dbg < (int)conv_data.U_dx[0].size(); ++dbg) {
+			printf(" %lld", conv_data.U_dx[0][dbg].toint128());
+		}
+		printf("\n");
+	}
 		// FIX THAT SHIFT DX
 		//dx = batch_convolution_der(conv.real_X,dx,rotated_Filter);
 		
@@ -1413,31 +1418,43 @@ struct convolution_layer_backprop conv_backprop(vector<vector<vector<vector<F>>>
 		
 		conv_data.dx = conv_data.U_dx;
 		
-		vector<vector<vector<vector<F>>>> new_der(batch);
-		int w = (int)sqrt(conv_data.U_dx[0].size());
-		//printf("DERRR %d,%d\n",conv_data.U_dx.size(),conv_data.U_dx[0].size() );
+	vector<vector<vector<vector<F>>>> new_der(batch);
+	vector<vector<vector<vector<F>>>> new_der_actual(batch);
+	int w = (int)sqrt(conv_data.U_dx[0].size());
+	//printf("DERRR %d,%d\n",conv_data.U_dx.size(),conv_data.U_dx[0].size() );
 
-		vector<vector<vector<F>>> r = shift_dense(conv_data.U_dx,1);
-		
+	vector<vector<vector<F>>> r = shift_dense(conv_data.U_dx,1);
 
-		conv_data.U_dx_shifted = r[1];
-		conv_data.U_dx_remainders = r[0];
-		
-		for(int i = 0; i < batch; i++){
-			//new_der[i].resize(dx[0].size());
-			new_der[i].resize(conv.chin);
-			for(int j = 0; j < conv.chin; j++){
-				new_der[i][j].resize(w);
-				for(int k = 0; k < w; k++){
-					new_der[i][j][k].resize(w);
-					for(int l = 0; l < w; l++){
-						new_der[i][j][k][l] = conv_data.U_dx_shifted[i* conv.chin + j][k*w + l];
-					}
+
+	conv_data.U_dx_shifted = r[1];
+	conv_data.U_dx_remainders = r[0];
+	if ((conv.idx == 0 || conv_debug == 1) && !conv_data.U_dx_shifted.empty()) {
+		printf("conv idx %d U_dx_shifted sample:", conv.idx);
+		for (int dbg = 0; dbg < 8 && dbg < (int)conv_data.U_dx_shifted[0].size(); ++dbg) {
+			printf(" %lld", conv_data.U_dx_shifted[0][dbg].toint128());
+		}
+		printf("\n");
+	}
+	
+	for(int i = 0; i < batch; i++){
+		//new_der[i].resize(dx[0].size());
+		new_der[i].resize(conv.chin);
+		new_der_actual[i].resize(conv.chin);
+		for(int j = 0; j < conv.chin; j++){
+			new_der[i][j].resize(w);
+			new_der_actual[i][j].resize(w);
+			for(int k = 0; k < w; k++){
+				new_der[i][j][k].resize(w);
+				new_der_actual[i][j][k].resize(w);
+				for(int l = 0; l < w; l++){
+					new_der[i][j][k][l] = conv_data.U_dx_shifted[i* conv.chin + j][k*w + l];
+					new_der_actual[i][j][k][l] = conv_data.U_dx[i* conv.chin + j][k*w + l];
 				}
 			}
 		}
+	}
 
-		derr = new_der;
+	derr = new_der_actual;
 	
 	}
 
@@ -1545,13 +1562,25 @@ struct convolutional_network back_propagation( struct convolutional_network net)
 	//printf("Calculating Backpropagation Circuit\n");
 	vector<vector<vector<vector<F>>>> der(batch),dx(batch);
 	vector<vector<F>> out_der(batch),dense_dx(batch);
-	for(int i = 0; i < batch; i++){
-		out_der[i] = initialize_filter(16);
+	if (!net.der.empty()) {
+		for (int i = 0; i < batch; i++) {
+			out_der[i].assign(net.Weights.back().size(), F(0));
+			for (int t = 0; t < net.Weights.back().size(); t++) {
+				out_der[i][t] = net.der[0][i][t][0][0];
+			}
+		}
+	} else {
+		for(int i = 0; i < batch; i++){
+			out_der[i] = initialize_filter(16); // was 16
+		}
 	}
-
+	// for(int i = 0; i < batch; i++){
+	// 	out_der[i] = initialize_filter(16);
+	// }
 	for(int i = net.Weights.size()-1; i >= 0; i--){
 		dense_der = dense_backprop(out_der,net.fully_connected[i]);
 		net.fully_connected_backprop.push_back(dense_der);
+		out_der = dense_der.dx_temp;
 		vector<F> v = convert2vector(out_der);
 		relu_der = relu_backprop(v,net.relus[relu_counter]);
 		for(int j = 0; j < out_der.size(); j++){
@@ -1663,5 +1692,3 @@ struct convolutional_network back_propagation( struct convolutional_network net)
 	return net;
 
 }
-
-

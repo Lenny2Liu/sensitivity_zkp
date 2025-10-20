@@ -25,6 +25,8 @@
 #include<unistd.h>
 
 extern int partitions;
+extern F epsilon = F(2);  
+
 
 int PC_scheme,Commitment_hash;
 int levels;
@@ -1482,7 +1484,9 @@ void prove_convolution_backprop(struct convolution_layer_backprop conv_back,stru
 	if(first){
 		//printf("First conv backprop\n");
 		r = generate_randomness((int)log2(convert2vector(conv_back.dx).size()),F(0));
-		previous_sum = evaluate_vector(convert2vector(conv_back.dx),r);
+		previous_sum = evaluate_vector(convert2vector(conv_back.U_dx_shifted),r);
+	} else {
+		previous_sum = evaluate_vector(convert2vector(conv_back.U_dx_shifted), r);
 	}
 
 	prove_shift(conv_back.U_dx_shifted,conv_back.U_dx_remainders,conv_back.U_dx,r,previous_sum);
@@ -1820,6 +1824,7 @@ void prove_backprop(struct convolutional_network net){
 
    	for(int i = net.Weights.size() -1; i >= 0; i--){
    		prove_relu_backprop(net.relus_backprop[relu_counter], r,previous_sum);
+		previous_sum = evaluate_vector(convert2vector(net.fully_connected_backprop[i].dx), r);
    		relu_counter--;
    		prove_dense_backprop(net.fully_connected_backprop[i],r,previous_sum);
    	}	
@@ -1841,24 +1846,43 @@ void prove_backprop(struct convolutional_network net){
    	
 }
 
+
+
 void prove_model_sensitivity(struct convolutional_network net,
                              int                            target_output,
                              vector<vector<vector<vector<F>>>> public_input)
 {
-    int feature_index = target_output;
+    int feature_index = target_output; // selected feature index
     struct proof P;
     int relu_counter = (int)net.relus.size() - 1;
-    vector<F> r;
-    F previous_sum;
+    vector<F> r; //local randomness
+    F previous_sum; //for sumcheck
 
-    prove_lookup(net.Batch_size, 16);
+    // prove_lookup(net.Batch_size, 16); 
+	printf("final out %d\n", net.final_out);
 
     for (int i = (int)net.fully_connected.size() - 1; i >= 0; --i) {
         auto &mlp = net.fully_connected[i];
         if (i == (int)net.fully_connected.size() - 1) {
+			/* bind the top output vect y to the chain, r is selected accordingly, and we 
+			are prving 2 product sum-check tfor the value of y.
+			*/
             r = generate_randomness(ceil_log2(convert2vector(mlp.Z_new).size()), F(0));
             previous_sum = evaluate_vector(convert2vector(mlp.Z_new), r);
+            vector<F> y = convert2vector(mlp.Z_new);
+			size_t p2y = 1ULL << ceil_log2(std::max<size_t>(1, y.size()));
+			y.resize(p2y, F(0));
+			vector<F> beta_r;
+			precompute_beta(r, beta_r);
+			proof P_y = generate_2product_sumcheck_proof(y, beta_r, r.empty()?F(0):r.back());
+			P_y.type = MATMUL_PROOF;
+			if (P_y.q_poly[0].eval(F(0)) + P_y.q_poly[0].eval(F(1)) != previous_sum) {
+				printf("Error: top output binding failed\n"); exit(-1);
+			}
+			Transcript.push_back(P_y);
+            
         }
+		// prove pre-relu activations, returns P.vr[0], new scalar; P.randomness, new challenges for l/r leaves
         P = _prove_matrix2matrix(mlp.Z_prev, mlp.W, r, previous_sum);
         Transcript.push_back(P);
         previous_sum = P.vr[0];
@@ -1867,27 +1891,79 @@ void prove_model_sensitivity(struct convolutional_network net,
         r.insert(r.end(), P.randomness[1].begin(), P.randomness[1].end());
 
         if (evaluate_vector(net.relus[relu_counter].output, r) != previous_sum) {
-            printf("Error in dense forward pass\n");
+            printf("Error in dense forward pass\n"); 
             exit(-1);
         }
+		// prove the activation layer, returns new scalar and new challenges
         auto relu_proofs = prove_relu(net.relus[relu_counter], r, previous_sum);
         --relu_counter;
     }
+	// prove the reshaping
     prove_flattening(net, r, previous_sum);
+	// prove the last layer conv
     prove_convolution(net.convolutions.back(), r, previous_sum, false);
-
     for (int i = (int)net.convolutions.size() - 2; i >= 0; --i) {
         prove_avg(net.avg_layers[i], r, previous_sum, net.convolution_pooling[i]);
         auto relu_proofs = prove_relu(net.relus[relu_counter], r, previous_sum);
         --relu_counter;
         prove_convolution(net.convolutions[i], r, previous_sum, true);
     }
+	// public input binding to the input in the first conv
+
+	// pack the input first
+	auto pack_public_like_first_conv =
+		[&](const vector<vector<vector<vector<F>>>> &X)->vector<vector<F>>{
+			int B = (int)X.size();
+			int C = net.convolutions.front().chin;
+			int n = net.convolutions.front().n;
+			vector<vector<F>> packed;
+			packed.reserve(B * C);
+			// B = C = 1 for now
+			for (int b = 0; b < B; ++b) {
+				for (int c = 0; c < C; ++c) {
+					vector<F> v(n*n, F(0));
+					for (int i = 0; i < n; ++i)
+						for (int j = 0; j < n; ++j)
+							v[n*n - 1 - i*n - j] = X[b][c][i][j]; 
+					packed.push_back(v);
+				}
+			}
+			return packed;
+		};
+	// sum check to prove <r, conv input> = <r, internal input>
+	vector<F> X_pub_flat = convert2vector(pack_public_like_first_conv(public_input));
+	vector<F> X_int_flat = convert2vector(net.convolutions.front().X);
+
+	size_t p2 = 1ULL << ceil_log2(std::max<size_t>(1, X_pub_flat.size()));
+	X_pub_flat.resize(p2, F(0));
+	X_int_flat.resize(p2, F(0));
+
+	int bitsX = ceil_log2(X_pub_flat.size());
+	vector<F> r_in = generate_randomness(bitsX, F(0));
+	vector<F> beta_in; precompute_beta(r_in, beta_in);
+
+	proof P_pub = generate_2product_sumcheck_proof(X_pub_flat, beta_in,
+													r_in.empty()?F(0):r_in.back());
+	P_pub.type = MATMUL_PROOF;
+	proof P_int = generate_2product_sumcheck_proof(X_int_flat, beta_in,
+													r_in.empty()?F(0):r_in.back());
+	P_int.type = MATMUL_PROOF;
+	if (P_pub.q_poly[0].eval(F(0)) + P_pub.q_poly[0].eval(F(1)) !=
+		P_int.q_poly[0].eval(F(0)) + P_int.q_poly[0].eval(F(1))) {
+		printf("Error: public input binding failed\n"); exit(-1);
+	}
+	Transcript.push_back(P_pub);
+	Transcript.push_back(P_int);
+
+	printf("Public input binding successful\n");
 
     vector<F> C_flat;
     C_flat.reserve(net.final_out);
 
-    for (int j = 0; j < net.final_out; ++j) {
-        vector<vector<vector<vector<vector<F>>>>> seed(1);
+
+	// traverse all output logits dimension
+    for (int j = 0; j < net.Weights.back().size(); ++j) {
+        vector<vector<vector<vector<vector<F>>>>> seed(89757);
         seed[0].resize(public_input.size());
         for (int b = 0; b < (int)public_input.size(); ++b) {
             seed[0][b].resize(net.final_out);
@@ -1898,67 +1974,123 @@ void prove_model_sensitivity(struct convolutional_network net,
             }
         }
 
-        net.convolutions_backprop.clear();
-        net.avg_backprop.clear();
-        net.relus_backprop.clear();
-        net.fully_connected_backprop.clear();
-        net.der_dim.clear();
-        net.w.clear();
+		net.convolutions_backprop.clear();
+		net.avg_backprop.clear();
+		net.relus_backprop.clear();
+		net.fully_connected_backprop.clear();
+		net.der_dim.clear();
+		net.w.clear();
 
-        net.der = seed;
-        net = back_propagation(net);
-        int relu_idx = (int)net.relus_backprop.size() - 1;
-        int avg_idx  = (int)net.avg_backprop.size()   - 1;
-        int conv_bp  = (int)net.convolutions_backprop.size() - 2;
+		net.der = seed;
+		net = back_propagation(net);
 
-        r = generate_randomness(ceil_log2(net.relus_backprop[relu_idx].dx.size()), F(0));
-        F prev_sum = evaluate_vector(net.relus_backprop[relu_idx].dx, r);
+		int relu_idx = (int)net.relus_backprop.size() - 1;
+		int avg_idx  = (int)net.avg_backprop.size() - 1;
+		int convolutions_counter   = (int)net.convolutions_backprop.size() - 2;
 
-        for (int i = 1; i < (int)net.convolutions_backprop.size(); ++i) {
-            prove_relu_backprop(net.relus_backprop[relu_idx], r, prev_sum);
+		vector<F> r_bp = generate_randomness(log2(net.relus_backprop[relu_idx].dx.size()), F(0));
+		// printf("Initial r_bp length: %zu\n", r_bp.size());
+		F prev_sum_bp = evaluate_vector(net.relus_backprop[relu_idx].dx, r_bp);
 
-            if (net.convolution_pooling[i - 1]) {
-                prove_avg_backprop(net.avg_backprop[avg_idx],
-                                   net.convolutions[i],
-                                   net.convolutions_backprop[conv_bp],
-                                   r, prev_sum, false);
-                --avg_idx;
-            }
+		int der_counter = (int)net.der.size() - 1;
 
-            prove_convolution_backprop(net.convolutions_backprop[conv_bp],
-                                       net.convolutions[i],
-                                       r, prev_sum, false);
-            --relu_idx; --conv_bp;
-        }
-        if (avg_idx == 0) {
-            prove_avg_backprop(net.avg_backprop[0],
-                               net.convolutions.back(),
-                               net.convolutions_backprop[0],
-                               r, prev_sum, false);
-        }
+		for (int i = 1; i < (int)net.convolutions_backprop.size(); ++i) {
 
-        flat_layer(net,
-                   net.convolutions_backprop[0],
-                   net.relus_backprop[relu_idx],
-                   r, prev_sum);
+			prove_relu_backprop(net.relus_backprop[relu_idx], r_bp, prev_sum_bp);
 
-        for (int d = (int)net.Weights.size() - 1; d >= 0; --d) {
-            prove_relu_backprop(net.relus_backprop[relu_idx], r, prev_sum);
-            --relu_idx;
-            prove_dense_backprop(net.fully_connected_backprop[d], r, prev_sum);
-        }
+			size_t expect_len = (size_t)net.der_dim[(int)net.der_dim.size() - i];
+			size_t have_len   = net.relus_backprop[relu_idx].dx.size();
 
-        vector<F> row = convert2vector(
-            net.convolutions_backprop.empty()
-                ? net.fully_connected_backprop[0].dx
-                : net.convolutions_backprop[0].dx);
+			// printf("Iteration %d: expect_len = %zu, have_len = %zu\n", i, expect_len, have_len);
+			if (have_len != expect_len) {
+				vector<F> data = tensor2vector(net.der[der_counter]);
+				data.push_back(F(0));
+				predicates_size.push_back(data.size() - 1); 
 
-        if (feature_index < 0 || feature_index >= (int)row.size()) {
-            printf("feature_index out of range: %d (row size %d)\n", feature_index, (int)row.size());
-            exit(-1);
-        }
-        C_flat.push_back(row[feature_index]);
-    }
+				proof P_res = prove_rescaling(
+					data,
+					r_bp,
+					(int)net.der[der_counter].size(),
+					(int)net.der[der_counter][0].size(),
+					(int)net.der[der_counter][0][0].size(),
+					net.w[der_counter]
+				);
+				if (prev_sum_bp != P_res.q_poly[0].eval(F(0)) + P_res.q_poly[0].eval(F(1))) {
+					printf("Error in rescaling GKR\n"); exit(1);
+				}
+				vector<F> r1;
+				int bits_res = (int)log2((int)data.size() - 1);
+				for (int j2 = 0; j2 < bits_res; ++j2)
+					r1.push_back(P_res.randomness[(int)P_res.randomness.size() - 1][j2]);
+				r_bp.swap(r1);
+				std::cout << "size of r_bp after rescaling: " << r_bp.size() << std::endl;
+				prev_sum_bp = evaluate_vector(data, r_bp);
+				--der_counter;
+			}
+			if (net.convolution_pooling[i - 1]) {
+				prove_avg_backprop(net.avg_backprop[avg_idx],
+								net.convolutions[i],
+								net.convolutions_backprop[(int)net.convolutions_backprop.size() - 1 - i],
+								r_bp, prev_sum_bp, false);
+				avg_idx--;
+			}
+			prove_convolution_backprop(net.convolutions_backprop[(int)net.convolutions_backprop.size() - 1 - i],
+									net.convolutions[i],
+									r_bp, prev_sum_bp, false);
+			relu_idx--;
+			convolutions_counter--;
+		}
+		if (avg_idx == 0) {
+			prove_avg_backprop(net.avg_backprop[0],
+							net.convolutions.back(),
+							net.convolutions_backprop[0],
+							r_bp, prev_sum_bp, false);
+		}
+		flat_layer(net,
+				net.convolutions_backprop[0],
+				net.relus_backprop[relu_idx],
+				r_bp, prev_sum_bp);
+		for (int d = (int)net.Weights.size() - 1; d >= 0; --d) {
+			if (relu_idx < 0) { printf("Error: relu_idx underflow in dense pass\n"); exit(-1); }
+			prove_relu_backprop(net.relus_backprop[relu_idx], r_bp, prev_sum_bp);
+			prev_sum_bp = evaluate_vector(convert2vector(net.fully_connected_backprop[d].dx), r_bp);
+			--relu_idx;
+			prove_dense_backprop(net.fully_connected_backprop[d], r_bp, prev_sum_bp);
+		}
+		vector<F> g_row = convert2vector(net.convolutions_backprop[0].dx);
+		if (j == 0) {
+			printf("g_row sample:");
+			for (int dbg = 0; dbg < 16 && dbg < (int)g_row.size(); ++dbg) {
+				printf(" %lld", g_row[dbg].toint128());
+			}
+			printf("\n");
+		}
+
+		if (feature_index < 0 || feature_index >= (int)g_row.size()) {
+			printf("feature_index out of range: %d (row size %d)\n",
+				feature_index, (int)g_row.size());
+			exit(-1);
+		}
+		const int bits_g  = ceil_log2(std::max<size_t>(1, g_row.size()));
+		const size_t p2g  = (size_t)1 << bits_g;
+
+		vector<F> g = g_row;
+		g.resize(p2g, F(0));
+		vector<F> delta_i(p2g, F(0));
+		delta_i[feature_index] = F(1);
+		struct proof P_coord = generate_2product_sumcheck_proof(
+			g, delta_i, F(0)
+		);
+		P_coord.type = MATMUL_PROOF;
+		F coord = P_coord.q_poly[0].eval(F(0)) + P_coord.q_poly[0].eval(F(1));
+		if (coord != g_row[feature_index]) {
+			printf("Error: coord extract mismatch\n");
+			exit(-1);
+		}
+		Transcript.push_back(P_coord);
+		C_flat.push_back(coord);
+	}
+
 
     size_t pow2 = 1ULL << ceil_log2(std::max<size_t>(1, C_flat.size()));
     C_flat.resize(pow2, F(0));
@@ -1970,17 +2102,29 @@ void prove_model_sensitivity(struct convolutional_network net,
     int bitsC = ceil_log2(C_flat.size());
     vector<F> r_eval = generate_randomness(bitsC, F(0));
     F s_check = evaluate_vector(C_flat, r_eval);
-
-    vector<F> beta_eval;
-    precompute_beta(r_eval, beta_eval);
-    struct proof P_eval = generate_2product_sumcheck_proof(C_flat, beta_eval,
-                                                           r_eval.empty() ? F(0) : r_eval.back());
+    vector<F> beta_eval; precompute_beta(r_eval, beta_eval);
+    struct proof P_eval = generate_2product_sumcheck_proof(C_flat, beta_eval, r_eval.empty()?F(0):r_eval.back());
     P_eval.type = MATMUL_PROOF;
-    if (P_eval.q_poly[0].eval(F(0)) + P_eval.q_poly[0].eval(F(1)) != s_check) {
-        printf("Error in sensitivity evaluation sum-check\n");
-        exit(-1);
-    }
+    if (P_eval.q_poly[0].eval(F(0)) + P_eval.q_poly[0].eval(F(1)) != s_check) { printf("Error: sensitivity evaluation sum-check\n"); exit(-1); }
     Transcript.push_back(P_eval);
+
+    F s_norm = F(0);
+    for (size_t t = 0; t < C_flat.size(); ++t) {
+		s_norm += C_flat[t] * C_flat[t];
+		printf("Sensitivity[%zu] = %lld\n", t, C_flat[t].toint128());
+	}
+
+    struct proof P_norm = generate_2product_sumcheck_proof(C_flat, C_flat, r_eval.empty()?F(0):r_eval.back());
+    P_norm.type = MATMUL_PROOF;
+    if (P_norm.q_poly[0].eval(F(0)) + P_norm.q_poly[0].eval(F(1)) != s_norm) { printf("Error: L2 norm sum-check\n"); exit(-1); }
+    Transcript.push_back(P_norm);
+	printf("L2 norm of sensitivity vector: %lld\n", s_norm.toint128());
+    F eps2 = epsilon * epsilon;
+    F delta = eps2 - s_norm;
+    vector<F> numbers(2, F(0)); numbers[0] = delta;
+    vector<F> r_bits = generate_randomness(1, F(0));
+    vector<F> bits = prepare_bit_vector(numbers, 64);
+    Transcript.push_back(_prove_bit_decomposition(bits, r_bits, evaluate_vector(numbers, r_bits), 64));
 }
 
 
@@ -2614,12 +2758,59 @@ int main(int argc, char *argv[]){
 	X = init_input(input_dim, channels);
 	printf("Public input X generated: %d batches, %d channels, %dx%d\n", 
 		Batch, channels, input_dim, input_dim);
+	// Print a few sample values
+	// if (X.size() > 0 && X[0].size() > 0 && X[0][0].size() > 0 && X[0][0][0].size() > 0) {
+	// 	printf("Sample values from X[0][0]:\n");
+	// 	for (int i = 0; i < (int)X[0][0].size(); i++) {
+	// 	 for (int j = 0; j < (int)X[0][0][0].size(); j++) {
+	// 		 printf("X[0][0][%d][%d] = %lld\n", i, j, X[0][0][i][j].toint128());
+	// 	 }
+	// 	}
+	// }
 	//check_dataset(Batch,  input_dim);
 	   	clock_t start,end;
 	   	
 		net = feed_forward(X, net,channels);
 	   	net = back_propagation(net);
 	   	
+		if (!net.fully_connected_backprop.empty()) {
+			auto &dx_temp = net.fully_connected_backprop.back().dx_temp;
+			if (!dx_temp.empty() && !dx_temp[0].empty()) {
+				printf("dx_temp sample:");
+				for (int dbg = 0; dbg < 8 && dbg < (int)dx_temp[0].size(); ++dbg) {
+					printf(" %lld", dx_temp[0][dbg].toint128());
+				}
+				printf("\n");
+			}
+		}
+		if (!net.convolutions_backprop.empty()) {
+			auto &dx0 = net.convolutions_backprop[0].dx;
+			if (!dx0.empty() && !dx0[0].empty()) {
+				printf("conv dx sample:");
+				for (int dbg = 0; dbg < 8 && dbg < (int)dx0[0].size(); ++dbg) {
+					printf(" %lld", dx0[0][dbg].toint128());
+				}
+				printf("\n");
+			}
+			auto &pad = net.convolutions_backprop[0].pad_der;
+			if (!pad.empty()) {
+				printf("pad_der sample:");
+				for (int dbg = 0; dbg < 8 && dbg < (int)pad[0].size(); ++dbg) {
+					printf(" %lld", pad[0][dbg].toint128());
+				}
+				printf("\n");
+			}
+		}
+		if (!net.relus_backprop.empty()) {
+			auto &relu_dx = net.relus_backprop.front().dx;
+			if (!relu_dx.empty()) {
+				printf("relu dx sample:");
+				for (int dbg = 0; dbg < 8 && dbg < (int)relu_dx.size(); ++dbg) {
+					printf(" %lld", relu_dx[dbg].toint128());
+				}
+				printf("\n");
+			}
+		}
 		
 
 
