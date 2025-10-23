@@ -1,0 +1,2 @@
+/usr/bin/ar qc libgradient_core.a CMakeFiles/gradient_core.dir/src/forward_backward.cpp.o CMakeFiles/gradient_core.dir/src/gkr_plan.cpp.o CMakeFiles/gradient_core.dir/src/model.cpp.o CMakeFiles/gradient_core.dir/src/pipeline.cpp.o CMakeFiles/gradient_core.dir/src/quantization.cpp.o CMakeFiles/gradient_core.dir/src/zk_globals.cpp.o CMakeFiles/gradient_core.dir/src/zk_prover.cpp.o
+/usr/bin/ranlib libgradient_core.a

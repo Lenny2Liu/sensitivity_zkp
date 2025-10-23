@@ -1318,7 +1318,7 @@ struct convolution_layer_backprop conv_backprop(vector<vector<vector<vector<F>>>
 	// it is given by the formula Padded_Derr * Rotate(W)
 	//if(1){
 	//printf("IDX : %d, width: %d\n",conv.idx,dx_width);
-	if(conv.idx != 0){
+	if(conv.idx != -1){
 		int pad_len_bit = (int)log2(2*(rotated_Filter[0][0].size()-1) + derr[0][0].size());
 		if(1 << pad_len_bit != 2*(rotated_Filter[0][0].size()-1) + derr[0][0].size()){
 			pad_len_bit++;

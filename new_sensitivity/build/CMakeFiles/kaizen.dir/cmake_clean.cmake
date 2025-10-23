@@ -1,0 +1,41 @@
+file(REMOVE_RECURSE
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/GKR.cpp.o"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/GKR.cpp.o.d"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/circuit.cpp.o"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/circuit.cpp.o.d"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/elliptic_curves.cpp.o"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/elliptic_curves.cpp.o.d"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/expander.cpp.o"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/expander.cpp.o.d"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/fieldElement.cpp.o"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/fieldElement.cpp.o.d"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/linear_code_encode.cpp.o"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/linear_code_encode.cpp.o.d"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/lookups.cpp.o"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/lookups.cpp.o.d"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/merkle_tree.cpp.o"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/merkle_tree.cpp.o.d"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/mimc.cpp.o"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/mimc.cpp.o.d"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/pol_verifier.cpp.o"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/pol_verifier.cpp.o.d"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/poly_commit.cpp.o"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/poly_commit.cpp.o.d"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/polynomial.cpp.o"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/polynomial.cpp.o.d"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/prover.cpp.o"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/prover.cpp.o.d"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/quantization.cpp.o"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/quantization.cpp.o.d"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/utils.cpp.o"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/utils.cpp.o.d"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/verifier.cpp.o"
+  "CMakeFiles/kaizen.dir/home/ubuntu/kaizen/src/verifier.cpp.o.d"
+  "libkaizen.a"
+  "libkaizen.pdb"
+)
+
+# Per-language clean rules from dependency scanning.
+foreach(lang CXX)
+  include(CMakeFiles/kaizen.dir/cmake_clean_${lang}.cmake OPTIONAL)
+endforeach()

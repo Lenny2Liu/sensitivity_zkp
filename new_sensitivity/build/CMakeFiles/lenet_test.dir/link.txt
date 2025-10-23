@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG CMakeFiles/lenet_test.dir/tests/lenet_test.cpp.o -o lenet_test  libgradient_core.a libkaizen.a /usr/lib/x86_64-linux-gnu/libgmp.so /home/ubuntu/new_sensitivity/../sensitivity_zkp/lib/libXKCP.a 
