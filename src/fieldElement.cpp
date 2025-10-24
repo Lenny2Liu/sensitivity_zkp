@@ -492,4 +492,25 @@ namespace virgo {
         __m256i and64 = _mm256_and_si256(x, packed_mod);
         return _mm256_add_epi64(srl64, and64);
     }
+    inline void _printIndent(std::ostream& os, int n) {
+    for (int i = 0; i < n; ++i) os.put(' ');
+}
+
+template <typename T>
+inline void printNested(const T& x, std::ostream& os, int indent = 0) {
+    os << x;
+}
+
+template <typename T>
+inline void printNested(const std::vector<T>& v, std::ostream& os, int indent = 0) {
+    os << "{\n";
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        _printIndent(os, indent + 2);
+        printNested(v[i], os, indent + 2);
+        if (i + 1 < v.size()) os << ",";
+        os << "\n";
+    }
+    _printIndent(os, indent);
+    os << "}";
+}
 }

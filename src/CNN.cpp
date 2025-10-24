@@ -3,6 +3,7 @@
 #include "MLP.h"
 #include "utils.hpp"
 #include "CNN.h"
+#include <fstream>
 #define LENET 1
 #define VGG 2
 #define TEST 3
@@ -902,10 +903,22 @@ void check_relu(vector<vector<vector<vector<F>>>> &input){
 }
 
 struct convolutional_network feed_forward(vector<vector<vector<vector<F>>>> &X, struct convolutional_network net, int channels){
+	vector<vector<vector<vector<F>>>> input;
+	if(model == VGG){
+		input = init_input(64,channels);
+	}
+	else if(model == AlexNet || model == mAlexNet){
+		input = init_input(64,channels);
+	}	
+	else{
+		input = init_input(32,channels);
+	}
+	
 	vector<vector<vector<vector<F>>>> Z_conv;
 	vector<vector<F>> Z(batch);
 	vector<vector<vector<vector<F>>>> real_input;
-	real_input = X;
+	real_input = input;
+	X = input;
 	struct convolution_layer conv_data;
 	struct fully_connected_layer mlp_data;
 	struct relu_layer relu_data;
@@ -1193,6 +1206,9 @@ struct dense_layer_backprop dense_backprop(vector<vector<F>> &dx,struct fully_co
 
 	//printf("new dx : (%d,%d), dw : (%d,%d)\n",dense_der.dx.size(),dense_der.dx[0].size(),dense_der.dw.size(),dense_der.dw[0].size());
 	dx = dense_der.dx;
+	// std::cout << "Dense layer dx : " << std::endl;
+	// virgo::printNested(dense_der.dx,std::cout);
+	// std::cout << std::endl;
 	return dense_der;
 }
 
@@ -1218,16 +1234,6 @@ struct convolution_layer_backprop conv_backprop(vector<vector<vector<vector<F>>>
 	//conv_data.fft_X = conv.fft_X;
 	//conv_data.fft_X.resize(conv.X.size());
 	//printf("FFT SIZE : %d\n",conv.X[0].size()*conv.X.size() );
-	static int conv_debug = 0;
-	if ((conv.idx == 0 || conv_debug == 0) && !derr.empty() && !derr[0].empty() && !derr[0][0].empty()) {
-		printf("conv idx %d derr sample:", conv.idx);
-		for (int dbg = 0; dbg < 8 && dbg < (int)derr[0][0][0].size(); ++dbg) {
-			printf(" %lld", derr[0][0][0][dbg].toint128());
-		}
-		printf("\n");
-	}
-	conv_debug++;
-
 	for(int i = 0; i < conv.X.size(); i++){
 		conv_data.fft_X.push_back(conv.fft_X[i]);
 		//conv_data.fft_X[i].resize(2*conv_data.fft_X[i].size(),F(0));
@@ -1253,13 +1259,7 @@ struct convolution_layer_backprop conv_backprop(vector<vector<vector<vector<F>>>
 		fft(conv_data.fft_der[i],(int)log2(conv_data.fft_der[i].size()),false);
 	}
 	end = clock();
-	//printf("FFT dw  : %f\n",(float)(end-start)/(float)CLOCKS_PER_SEC );
-	
-	//printf("FFT 1 computed %d,%d, %d, %d\n",conv.chin,conv.chout,conv_data.fft_X[0].size(),conv_data.fft_der[0].size());
-	// Derr.size : Batch
-	// Derr[0].size : chout
-	// conv.fft_x : [Batch*chin][n*n]
-	// conv.der_x : [Batch*chout][n'*n']
+
 	conv_data.Prod.resize(conv.chout*conv.chin);
 	
 	for(int i = 0; i < derr.size(); i++){
@@ -1318,7 +1318,7 @@ struct convolution_layer_backprop conv_backprop(vector<vector<vector<vector<F>>>
 	// it is given by the formula Padded_Derr * Rotate(W)
 	//if(1){
 	//printf("IDX : %d, width: %d\n",conv.idx,dx_width);
-	if(conv.idx != -1){
+	if(conv.idx != 0){
 		int pad_len_bit = (int)log2(2*(rotated_Filter[0][0].size()-1) + derr[0][0].size());
 		if(1 << pad_len_bit != 2*(rotated_Filter[0][0].size()-1) + derr[0][0].size()){
 			pad_len_bit++;
@@ -1392,20 +1392,13 @@ struct convolution_layer_backprop conv_backprop(vector<vector<vector<vector<F>>>
 		}
 		// Compute IFFT
 		conv_data.U_dx.resize(batch*conv.chin);
-	for(int i = 0; i < conv_data.U_dx.size(); i++){
-		vector<F> u = conv_data.Prod_dx[i];
-		fft(u,(int)log2(u.size()),true);
-		for(int j = 0; j < u.size()/2; j++){
-			conv_data.U_dx[i].push_back(u[j]);
+		for(int i = 0; i < conv_data.U_dx.size(); i++){
+			vector<F> u = conv_data.Prod_dx[i];
+			fft(u,(int)log2(u.size()),true);
+			for(int j = 0; j < u.size()/2; j++){
+				conv_data.U_dx[i].push_back(u[j]);
+			}
 		}
-	}
-	if ((conv.idx == 0 || conv_debug == 1) && !conv_data.U_dx.empty()) {
-		printf("conv idx %d U_dx sample:", conv.idx);
-		for (int dbg = 0; dbg < 8 && dbg < (int)conv_data.U_dx[0].size(); ++dbg) {
-			printf(" %lld", conv_data.U_dx[0][dbg].toint128());
-		}
-		printf("\n");
-	}
 		// FIX THAT SHIFT DX
 		//dx = batch_convolution_der(conv.real_X,dx,rotated_Filter);
 		
@@ -1418,43 +1411,31 @@ struct convolution_layer_backprop conv_backprop(vector<vector<vector<vector<F>>>
 		
 		conv_data.dx = conv_data.U_dx;
 		
-	vector<vector<vector<vector<F>>>> new_der(batch);
-	vector<vector<vector<vector<F>>>> new_der_actual(batch);
-	int w = (int)sqrt(conv_data.U_dx[0].size());
-	//printf("DERRR %d,%d\n",conv_data.U_dx.size(),conv_data.U_dx[0].size() );
+		vector<vector<vector<vector<F>>>> new_der(batch);
+		int w = (int)sqrt(conv_data.U_dx[0].size());
+		//printf("DERRR %d,%d\n",conv_data.U_dx.size(),conv_data.U_dx[0].size() );
 
-	vector<vector<vector<F>>> r = shift_dense(conv_data.U_dx,1);
+		vector<vector<vector<F>>> r = shift_dense(conv_data.U_dx,1);
+		
 
-
-	conv_data.U_dx_shifted = r[1];
-	conv_data.U_dx_remainders = r[0];
-	if ((conv.idx == 0 || conv_debug == 1) && !conv_data.U_dx_shifted.empty()) {
-		printf("conv idx %d U_dx_shifted sample:", conv.idx);
-		for (int dbg = 0; dbg < 8 && dbg < (int)conv_data.U_dx_shifted[0].size(); ++dbg) {
-			printf(" %lld", conv_data.U_dx_shifted[0][dbg].toint128());
-		}
-		printf("\n");
-	}
-	
-	for(int i = 0; i < batch; i++){
-		//new_der[i].resize(dx[0].size());
-		new_der[i].resize(conv.chin);
-		new_der_actual[i].resize(conv.chin);
-		for(int j = 0; j < conv.chin; j++){
-			new_der[i][j].resize(w);
-			new_der_actual[i][j].resize(w);
-			for(int k = 0; k < w; k++){
-				new_der[i][j][k].resize(w);
-				new_der_actual[i][j][k].resize(w);
-				for(int l = 0; l < w; l++){
-					new_der[i][j][k][l] = conv_data.U_dx_shifted[i* conv.chin + j][k*w + l];
-					new_der_actual[i][j][k][l] = conv_data.U_dx[i* conv.chin + j][k*w + l];
+		conv_data.U_dx_shifted = r[1];
+		conv_data.U_dx_remainders = r[0];
+		
+		for(int i = 0; i < batch; i++){
+			//new_der[i].resize(dx[0].size());
+			new_der[i].resize(conv.chin);
+			for(int j = 0; j < conv.chin; j++){
+				new_der[i][j].resize(w);
+				for(int k = 0; k < w; k++){
+					new_der[i][j][k].resize(w);
+					for(int l = 0; l < w; l++){
+						new_der[i][j][k][l] = conv_data.U_dx_shifted[i* conv.chin + j][k*w + l];
+					}
 				}
 			}
 		}
-	}
 
-	derr = new_der_actual;
+		derr = new_der;
 	
 	}
 
@@ -1467,6 +1448,10 @@ struct convolution_layer_backprop conv_backprop(vector<vector<vector<vector<F>>>
 struct avg_layer_backprop avg_pool_der(vector<vector<vector<vector<F>>>> &derr,int dx_width, int old_w){
 	// Computing avg pool derivative. This will be done with a circuit that 
 	// takse U_dx and returns new_der
+	std::ofstream fout("der_values.txt", std::ios::app);
+
+	virgo::printNested(derr, fout);
+	fout << std::endl;
 	struct avg_layer_backprop avg_data;
 	vector<vector<vector<vector<F>>>> new_der(batch),new_dx(batch);
 	for(int i = 0; i < derr.size(); i++){
@@ -1474,10 +1459,14 @@ struct avg_layer_backprop avg_pool_der(vector<vector<vector<vector<F>>>> &derr,i
 			avg_data.der_prev.push_back(convert2vector(derr[i][j]));
 		}
 	}
+
 	int avg_grad_bit = (int)log2(dx_width);
+	// std::cout << "Avg Pooling dx width before adjustment: " << dx_width << std::endl;
+
 	if(1<<avg_grad_bit != dx_width){
 		avg_grad_bit++;
 	}
+	// std::cout << "Avg Pooling grad bit before adjustment: " << avg_grad_bit << std::endl;
 	avg_data.der_w = derr[0][0].size();
 	avg_data.dx_size = dx_width;
 	//printf("dx width : %d\n",dx_width );
@@ -1485,11 +1474,6 @@ struct avg_layer_backprop avg_pool_der(vector<vector<vector<vector<F>>>> &derr,i
 	int avg_pad_len = 1<<avg_grad_bit;
 	
 	avg_data.w_final = old_w;
-	//avg_data.w_final = 2*avg_pad_len;
-	//printf("avg data final : %d,%d, %d \n", avg_data.w_final,derr[0][0].size(),derr[0][0][0].size());
-	//if(2*avg_pad_len == derr[0][0].size()){
-	//	avg_data.w_final = 2*avg_data.w_final;
-	//}
 	for(int i = 0; i < batch; i++){
 		new_der[i].resize(derr[0].size());
 		new_dx[i].resize(derr[0].size());
@@ -1498,7 +1482,6 @@ struct avg_layer_backprop avg_pool_der(vector<vector<vector<vector<F>>>> &derr,i
 				new_der[i][j].resize(old_w);
 			}else{
 				new_der[i][j].resize(old_w);
-
 			}
 			for(int k = 0; k < new_der[i][j].size(); k++){
 				new_der[i][j][k].resize(new_der[i][j].size());
@@ -1515,41 +1498,77 @@ struct avg_layer_backprop avg_pool_der(vector<vector<vector<vector<F>>>> &derr,i
 			}
 		}
 	}
+
 	
-	//printf("OK %d %d %d %d / %d %d %d %d\n", new_der.size(),new_der[0].size(),new_der[0][0].size(),new_der[0][0][0].size(),derr.size(),derr[0].size(),derr[0][0].size(),derr[0][0][0].size());
-	
-	for(int i = 0; i < batch; i++){
-		for(int j = 0; j < derr[i].size(); j++){
-			for(int k = 0; k < dx_width; k++){
-				for(int h = 0; h < dx_width; h++){
-					new_der[i][j][2*k][2*h] = derr[i][j][k][h];
-					new_der[i][j][2*k+1][2*h] = derr[i][j][k][h];
-					new_der[i][j][2*k][2*h+1] = derr[i][j][k][h];
-					new_der[i][j][2*k+1][2*h+1] = derr[i][j][k][h];
-					//new_dx[i][j][2*k][2*h] = dx[i][j][k][h];
-					//new_dx[i][j][2*k+1][2*h] = dx[i][j][k][h];
-					//new_dx[i][j][2*k][2*h+1] = dx[i][j][k][h];
-					//new_dx[i][j][2*k+1][2*h+1] = dx[i][j][k][h];
-						
-				}
-			}
-		}
+	printf("OK %d %d %d %d / %d %d %d %d\n", new_der.size(),new_der[0].size(),new_der[0][0].size(),new_der[0][0][0].size(),derr.size(),derr[0].size(),derr[0][0].size(),derr[0][0][0].size());
+	printf("Avg Pooling backprop dx width : %d\n", dx_width);
+	// for(int i = 0; i < batch; i++){
+	// 	for(int j = 0; j < derr[i].size(); j++){
+	// 		for(int k = 0; k < dx_width; k++){
+	// 			for(int h = 0; h < dx_width; h++){
+	// 				if (derr[i][j][k][h] != F(0)){
+	// 					std::cout << "Avg Pooling derr value at (" << i << "," << j << "," << k << "," << h << "): " << derr[i][j][k][h] << std::endl;
+	// 				}
+	// 				new_der[i][j][2*k][2*h] = derr[i][j][k][h];
+	// 				new_der[i][j][2*k+1][2*h] = derr[i][j][k][h];
+	// 				new_der[i][j][2*k][2*h+1] = derr[i][j][k][h];
+	// 				new_der[i][j][2*k+1][2*h+1] = derr[i][j][k][h];
+	// 			}
+	// 		}
+	// 	}
+	// }
+	// compute once (per layer) after you know sizes
+	const int P = (int)derr[0][0].size();
+	const int d = dx_width;
+	const int W_out = old_w;
+	auto find_offset = [&](const auto &A)->int {
+		int P = (int)A.size();
+		int row = P, col = P;
+		for (int r = 0; r < P; ++r)
+			for (int c = 0; c < P; ++c)
+				if (A[r][c] != F(0)) { row = std::min(row, r); col = std::min(col, c); }
+		return std::min(row, col);
+	};
+
+	const int src = find_offset(derr[0][0]);
+	const int dst = old_w - 2*dx_width;
+
+    const F inv4 = F(4).inv();
+
+    for (int i = 0; i < batch; ++i) {
+      for (int j = 0; j < (int)derr[i].size(); ++j) {
+        for (int k = 0; k < d; ++k) {
+          for (int h = 0; h < d; ++h) {
+            const F g = derr[i][j][src + k][src + h];
+            const int r = dst + 2*k, c = dst + 2*h;
+            new_der[i][j][r][c] = g * inv4;
+            new_der[i][j][r + 1][c] = g * inv4;
+            new_der[i][j][r][c + 1] = g * inv4;
+            new_der[i][j][r + 1][c + 1] = g * inv4;
+          }
+        }
+      }
 	}
-	
-	
-	//printf("AGV dx (%d,%d,%d,%d)\n",dx.size(),dx[0].size(),dx[0][0].size(),dx[0][0][0].size() );
-	//dx = new_dx;
+
 	derr = new_der;
 	for(int i = 0; i < derr.size(); i++){
 		for(int j = 0; j < derr[i].size(); j++){
 			avg_data.dx.push_back(convert2vector(derr[i][j]));
 		}
 	}
-	
-	//printf("AVG (%d,%d)/ (%d,%d)\n",avg_data.dx.size(),avg_data.dx[0].size(), avg_data.der_prev.size(),avg_data.der_prev[0].size());
+
+    
+    if (!fout) {
+        std::cerr << "Error: cannot open file for writing.\n";
+    }
+
+    virgo::printNested(avg_data.dx, fout);
+    fout << std::endl;
+    fout.close();
 	avg_data.dx_window_bit = (int)log2(dx_width);
 	return avg_data;
 }
+
 
 
 
@@ -1559,28 +1578,21 @@ struct convolutional_network back_propagation( struct convolutional_network net)
 	struct relu_layer_backprop relu_der;
 	int relu_counter = net.relus.size()-1;
 	int in_size;
-	//printf("Calculating Backpropagation Circuit\n");
 	vector<vector<vector<vector<F>>>> der(batch),dx(batch);
 	vector<vector<F>> out_der(batch),dense_dx(batch);
-	if (!net.der.empty()) {
-		for (int i = 0; i < batch; i++) {
-			out_der[i].assign(net.Weights.back().size(), F(0));
-			for (int t = 0; t < net.Weights.back().size(); t++) {
-				out_der[i][t] = net.der[0][i][t][0][0];
-			}
-		}
-	} else {
-		for(int i = 0; i < batch; i++){
-			out_der[i] = initialize_filter(16); // was 16
-		}
+	for(int i = 0; i < batch; i++){
+		out_der[i] = initialize_filter(16);
 	}
-	// for(int i = 0; i < batch; i++){
-	// 	out_der[i] = initialize_filter(16);
-	// }
+
+	// for (int b = 0; b < batch; ++b) {
+    //     out_der[b].assign(16, F_ZERO);
+    // }
+    // out_der[0][1] = quantize(1.0f);
+	// virgo::printNested(out_der, std::cout);
+	// std::cout << std::endl;
 	for(int i = net.Weights.size()-1; i >= 0; i--){
 		dense_der = dense_backprop(out_der,net.fully_connected[i]);
 		net.fully_connected_backprop.push_back(dense_der);
-		out_der = dense_der.dx_temp;
 		vector<F> v = convert2vector(out_der);
 		relu_der = relu_backprop(v,net.relus[relu_counter]);
 		for(int j = 0; j < out_der.size(); j++){
@@ -1596,50 +1608,39 @@ struct convolutional_network back_propagation( struct convolutional_network net)
 	int last_conv = net.Filters.size()-1;
 	for(int i = 0; i < der.size(); i++){
 		der[i].resize(net.final_out);
-		//dx[i].resize(net.final_out);
 		for(int j = 0; j < der[i].size(); j++){
 			der[i][j].resize(net.flatten_n);
-			//der[i][j].resize(net.convolutions[last_conv].n);
-			//dx[i][j].resize(net.final_w);
 			for(int k = 0; k < der[i][j].size(); k++){
 				for(int l = 0; l < der[i][j].size(); l++){
 					der[i][j][k].push_back(F(0));
 				}
 			}
-			//for(int k = 0; k < dx[i][j].size(); k++){
-				//dx[i][j][k].resize(net.final_w);
-			//}
-			
 			for(int k = 0; k < net.final_w; k++){
 				for(int l = 0; l < net.final_w; l++){
-					//dx[i][j][k][l] = out_der[i][net.final_w*net.final_w*j + k*net.final_w + l];
 					der[i][j][k][l] = out_der[i][net.final_w*net.final_w*j + k*net.final_w + l];
 				}
 			}
 		}
 	}
-	int real_dx_width = net.final_w; 
-	//printf("Der : %d,%d,%d / dx : %d,%d,%d / in_size : %d/ n : %d\n", der.size(),der[0].size(),der[0][0].size(),dx.size(),dx[0].size(),dx[0][0].size(),in_size,net.convolutions[last_conv].n);
+	std::ofstream fout("der_values.txt");
+    if (!fout) {
+        std::cerr << "Error: cannot open file for writing.\n";
+    }
+	virgo::printNested(der, fout);
+	fout << " before pooling above"<< std::endl;
 	
+	int real_dx_width = net.final_w; 
 	if(net.convolution_pooling[net.Filters.size() - 1] != 0){
-		//printf("FIRST AVG : %d,%d,%d,%d \n",der.size(),der[0].size(),der[0][0].size(),real_dx_width );
-
+		printf("Avg Pooling backprop for last layer==============================\n");
 		net.avg_backprop.push_back(avg_pool_der(der,real_dx_width,net.avg_layers[net.Filters.size() - 1].n));
-		//printf("FIRST AVG : %d,%d,%d,%d \n",der.size(),der[0].size(),der[0][0].size(),real_dx_width );
 		real_dx_width *=2;
 	}
-	//printf("Der : %d,%d,%d / dx : %d,%d,%d / in_size : %d/ n : %d\n", der.size(),der[0].size(),der[0][0].size(),dx.size(),dx[0].size(),dx[0][0].size(),in_size,net.convolutions[last_conv].n);
-	
 	for(int i = net.Filters.size() - 1; i >= 0; i--){
 		
 		net.convolutions_backprop.push_back(conv_backprop(der,real_dx_width,net.convolutions[i],net.Rotated_Filters[i]));
-		//printf("DX : (%d,%d,%d,%d) , Der : (%d,%d,%d,%d)\n",dx.size(),dx[0].size(),dx[0][0].size(),dx[0][0][0].size(),der.size(),der[0].size(),der[0][0].size(),der[0][0][0].size() );
-		//printf("Conv %d, pos : %d \n",i,net.convolutions_backprop.size());
 		if(i != 0){
-			//printf("POOL %d\n", net.convolution_pooling[i-1]);
 			if(net.convolution_pooling[i-1] != 0){
 				net.avg_backprop.push_back(avg_pool_der(der,real_dx_width,net.avg_layers[i-1].n));
-				//printf("Avg %d, pos : %d \n",i,net.avg_backprop.size());
 				real_dx_width *= 2;
 			}
 			
@@ -1665,30 +1666,17 @@ struct convolutional_network back_propagation( struct convolutional_network net)
 				}
 				der = temp;
 			}
-
 			vector<F> v = tensor2vector(der);
 			relu_der = relu_backprop(v,net.relus[relu_counter]);
 			der = vector2tensor(relu_der.dx,der,w);
-
-			/*
-			int counter = 0;
-			for(int j = 0; j < dx.size(); j++){
-				for(int k = 0; k < dx[0].size(); k++){
-					for(int l = 0; l < dx[0][0].size(); l++){
-						for(int m = 0; m < dx[0][0][0].size(); m++){
-							dx[j][k][l][m] = der[j][k][l][m];
-						}
-					}
-				}
-			}
-			*/
-			//dx = compute_relu(dx);
 			net.relus_backprop.push_back(relu_der);
-			//printf("Relu %d, pos : %d \n",i,net.relus_backprop.size());
 			relu_counter--;
-			
 		}
 	}
+	std::ofstream fout2("finalder_values.txt");
+	virgo::printNested(der, fout2);
+	fout2 << std::endl;
+	fout2.close();
 	return net;
 
 }
