@@ -1531,6 +1531,7 @@ struct avg_layer_backprop avg_pool_der(vector<vector<vector<vector<F>>>> &derr,i
 	};
 
 	const int src = find_offset(derr[0][0]);
+	std::cout << "Avg Pooling backprop src offset: " << src << std::endl;
 	const int dst = old_w - 2*dx_width;
 
     const F inv4 = F(4).inv();
@@ -1541,10 +1542,10 @@ struct avg_layer_backprop avg_pool_der(vector<vector<vector<vector<F>>>> &derr,i
           for (int h = 0; h < d; ++h) {
             const F g = derr[i][j][src + k][src + h];
             const int r = dst + 2*k, c = dst + 2*h;
-            new_der[i][j][r][c] = g * inv4;
-            new_der[i][j][r + 1][c] = g * inv4;
-            new_der[i][j][r][c + 1] = g * inv4;
-            new_der[i][j][r + 1][c + 1] = g * inv4;
+            new_der[i][j][r][c] = g; // * inv4;
+            new_der[i][j][r + 1][c] = g; // * inv4;
+            new_der[i][j][r][c + 1] = g; //  * inv4;
+            new_der[i][j][r + 1][c + 1] = g; // * inv4;
           }
         }
       }
@@ -1584,10 +1585,10 @@ struct convolutional_network back_propagation( struct convolutional_network net)
 		out_der[i] = initialize_filter(16);
 	}
 
-	// for (int b = 0; b < batch; ++b) {
-    //     out_der[b].assign(16, F_ZERO);
-    // }
-    // out_der[0][1] = quantize(1.0f);
+	for (int b = 0; b < batch; ++b) {
+        out_der[b].assign(16, F_ZERO);
+    }
+    out_der[0][1] = quantize(1.0f);
 	// virgo::printNested(out_der, std::cout);
 	// std::cout << std::endl;
 	for(int i = net.Weights.size()-1; i >= 0; i--){
@@ -1622,13 +1623,7 @@ struct convolutional_network back_propagation( struct convolutional_network net)
 			}
 		}
 	}
-	std::ofstream fout("der_values.txt");
-    if (!fout) {
-        std::cerr << "Error: cannot open file for writing.\n";
-    }
-	virgo::printNested(der, fout);
-	fout << " before pooling above"<< std::endl;
-	
+
 	int real_dx_width = net.final_w; 
 	if(net.convolution_pooling[net.Filters.size() - 1] != 0){
 		printf("Avg Pooling backprop for last layer==============================\n");
@@ -1673,10 +1668,6 @@ struct convolutional_network back_propagation( struct convolutional_network net)
 			relu_counter--;
 		}
 	}
-	std::ofstream fout2("finalder_values.txt");
-	virgo::printNested(der, fout2);
-	fout2 << std::endl;
-	fout2.close();
 	return net;
 
 }

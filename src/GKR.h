@@ -88,7 +88,7 @@ struct proof generate_GKR_proof(char *circuit_name, char *input_file,vector<F> d
 struct proof prove_dx_prod(vector<F> data, vector<F> randomness,int vector_size,int N, int ch_in,int ch_out);
 struct proof prove_dw_prod(vector<F> data, vector<F> randomness,int vector_size,int N, int ch_in,int ch_out);
 struct proof prove_dot_x_prod(vector<F> data, vector<F> randomness,int vector_size,int N, int ch_in,int ch_out);
-struct proof prove_avg_der(vector<F> data, vector<F> randomness,int batch, int chin, int w, int w_pad,int window,int mod);
+struct proof prove_avg_der(vector<F> data, vector<F> randomness,int batch, int chin, int w, int w_pad,int window,int src_off, int out_off, int mod);
 struct proof prove_relu(vector<F> data, vector<F> randomness,int vector_size);
 struct proof prove_avg(vector<F> data, vector<F> randomness,int n_padded, int n, int batch, int chout);
 

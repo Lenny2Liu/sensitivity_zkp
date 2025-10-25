@@ -226,7 +226,7 @@ void parse_dw(ifstream &circuit_in, long long int *in,int vector_size, int N, in
 void parse_dot_x(ifstream &circuit_in, long long int *in,int vector_size, int N, int ch_in, int ch_out);
 void parse_relu(ifstream &circuit_in, long long int *in, int vector_size);
 void parse_avg(ifstream &circuit_in, long long int *in, int n_padded, int n, int batch, int chout);
-void parse_avg_der(ifstream &circuit_in, long long int *in, int batch, int chin, int w, int w_pad,int window,int mod);
+void parse_avg_der(ifstream &circuit_in, long long int *in, int batch, int chin, int w, int w_pad,int window,int src_off, int dst_off,int mod);
 
 void parse_flat(ifstream &circuit_in, long long int *in, int batch, int chout, int w, int w_final);
 void parse_flat_backprop(ifstream &circuit_in, long long int *in, int batch, int chout, int w, int w_pad);
@@ -798,7 +798,7 @@ struct proof prove_relu(vector<F> data, vector<F> randomness,int vector_size){
 
 
 
-struct proof prove_avg_der(vector<F> data, vector<F> randomness,int batch, int chin, int w, int w_pad,int window,int mod){
+struct proof prove_avg_der(vector<F> data, vector<F> randomness,int batch, int chin, int w, int w_pad,int window,int src_off, int dst_off, int mod){
     layeredCircuit c;
     char *input_file,*circuit_name;
     long long int *in;
@@ -811,7 +811,7 @@ struct proof prove_avg_der(vector<F> data, vector<F> randomness,int batch, int c
 
     ifstream circuit_in;
     in_circuit_dag.clear();
-    parse_avg_der(circuit_in,in,batch, chin, w, w_pad,window,mod);
+    parse_avg_der(circuit_in,in,batch, chin, w, w_pad,window,src_off, dst_off, mod);
     c = DAG_to_layered();
     c.subsetInit();
     prover p(c,input_file,data,false);
@@ -3170,71 +3170,58 @@ void parse_avg(ifstream &circuit_in, long long int *in, int n_padded, int n, int
 
 }
 
-void parse_avg_der(ifstream &circuit_in, long long int *in, int batch, int chin, int w, int w_pad,int window,int mod){
+void parse_avg_der(ifstream &circuit_in, long long int *in, int batch, int chin, int w, int w_pad,int window,int src_off, int dst_off, int mod){
     
+   int counter = 0;
 
-    int counter = 0;
-    vector<vector<int>> arr(chin*batch);
-    for(int i = 0; i < batch; i++){
-        for(int j = 0; j  < chin; j++){
-            for(int k = 0;k < w_pad; k++){
-                for(int l = 0; l < w_pad; l++){
+    std::vector<std::vector<int>> arr(chin*batch);
+    for (int i = 0; i < batch; ++i) {
+        for (int j = 0; j < chin; ++j) {
+            for (int r = 0; r < w_pad; ++r)
+                for (int c = 0; c < w_pad; ++c) {
                     buildInput(counter, 0);
-                    arr[i*chin + j].push_back(counter);
-                    counter++;
+                    arr[i*chin + j].push_back(counter++);
                 }
-            }
         }
     }
+
     buildInput(counter, 0);
-    int zero = counter;
-    counter+=1;
-    for(int i = 0; i < batch; i++){
-        for(int j = 0; j < chin; j++){
-            for(int k = 0; k < w; k++){
-                for(int l = 0; l < w; l++){
-                    if(mod == 0){
-                        buildGate(Add, counter, zero, arr[i*chin+j][w_pad*w_pad -1 - w_pad*k - l], false);
-                        counter++;
-                        buildGate(Add, counter, zero, arr[i*chin+j][w_pad*w_pad -1 - w_pad*k - l], false);
-                        counter++;
-                    }
-                    else{
-                        buildGate(Add, counter, zero, arr[i*chin+j][w_pad*k + l], false);
-                        counter++;
-                        buildGate(Add, counter, zero, arr[i*chin+j][w_pad*k + l], false);
-                        counter++;
-                    }
+    const int zero = counter++;
+
+    for (int i = 0; i < batch; ++i) {
+        for (int j = 0; j < chin; ++j) {
+            for (int r = 0; r < dst_off; ++r)
+                for (int c = 0; c < window; ++c)
+                    buildGate(Add, counter++, zero, zero, false);
+            for (int k = 0; k < w; ++k) {
+                for (int c = 0; c < dst_off; ++c)
+                    buildGate(Add, counter++, zero, zero, false);
+                for (int l = 0; l < w; ++l) {
+                    const int sr = src_off + (mod ? k : (w-1-k));
+                    const int sc = src_off + (mod ? l : (w-1-l));
+                    const int src_idx = sr * w_pad + sc;
+
+                    buildGate(Add, counter++, zero, arr[i*chin + j][src_idx], false);
+                    buildGate(Add, counter++, zero, arr[i*chin + j][src_idx], false);
                 }
-                for(int l = 2*w; l < window; l++ ){
-                    buildGate(Add, counter, zero, zero, false);
-                    counter++;
+                for (int c = dst_off + 2*w; c < window; ++c)
+                    buildGate(Add, counter++, zero, zero, false);
+                for (int c = 0; c < dst_off; ++c)
+                    buildGate(Add, counter++, zero, zero, false);
+                for (int l = 0; l < w; ++l) {
+                    const int sr = src_off + (mod ? k : (w-1-k));
+                    const int sc = src_off + (mod ? l : (w-1-l));
+                    const int src_idx = sr * w_pad + sc;
+                    buildGate(Add, counter++, zero, arr[i*chin + j][src_idx], false);
+                    buildGate(Add, counter++, zero, arr[i*chin + j][src_idx], false);
                 }
-                for(int l = 0; l < w; l++){
-                    if(mod == 0){
-                        buildGate(Add, counter, zero, arr[i*chin+j][w_pad*w_pad -1 - w_pad*k - l], false);
-                        counter++;
-                        buildGate(Add, counter, zero, arr[i*chin+j][w_pad*w_pad -1 - w_pad*k - l], false);
-                        counter++;
-                    }
-                    else{
-                        buildGate(Add, counter, zero, arr[i*chin+j][w_pad*k + l], false);
-                        counter++;
-                        buildGate(Add, counter, zero, arr[i*chin+j][w_pad*k + l], false);
-                        counter++;
-                    }
-                }
-                for(int l = 2*w; l < window; l++ ){
-                    buildGate(Add, counter, zero, zero, false);
-                    counter++;
-                }
+                for (int c = dst_off + 2*w; c < window; ++c)
+                    buildGate(Add, counter++, zero, zero, false);
             }
-            for(int k = 2*w; k < window; k++){
-                for(int l = 0; l < window; l++){
-                    buildGate(Add, counter, zero, zero, false);
-                    counter++;   
-                }
-            }
+
+            for (int r = dst_off + 2*w; r < window; ++r)
+                for (int c = 0; c < window; ++c)
+                    buildGate(Add, counter++, zero, zero, false);
         }
     }
 }
