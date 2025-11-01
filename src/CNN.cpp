@@ -913,7 +913,7 @@ struct convolutional_network feed_forward(vector<vector<vector<vector<F>>>> &X, 
 	else{
 		input = init_input(32,channels);
 	}
-	
+	if (!X.empty()) input = X;
 	vector<vector<vector<vector<F>>>> Z_conv;
 	vector<vector<F>> Z(batch);
 	vector<vector<vector<vector<F>>>> real_input;
@@ -1449,7 +1449,6 @@ struct avg_layer_backprop avg_pool_der(vector<vector<vector<vector<F>>>> &derr,i
 	// Computing avg pool derivative. This will be done with a circuit that 
 	// takse U_dx and returns new_der
 	std::ofstream fout("der_values.txt", std::ios::app);
-
 	virgo::printNested(derr, fout);
 	fout << std::endl;
 	struct avg_layer_backprop avg_data;
@@ -1459,14 +1458,10 @@ struct avg_layer_backprop avg_pool_der(vector<vector<vector<vector<F>>>> &derr,i
 			avg_data.der_prev.push_back(convert2vector(derr[i][j]));
 		}
 	}
-
 	int avg_grad_bit = (int)log2(dx_width);
-	// std::cout << "Avg Pooling dx width before adjustment: " << dx_width << std::endl;
-
 	if(1<<avg_grad_bit != dx_width){
 		avg_grad_bit++;
 	}
-	// std::cout << "Avg Pooling grad bit before adjustment: " << avg_grad_bit << std::endl;
 	avg_data.der_w = derr[0][0].size();
 	avg_data.dx_size = dx_width;
 	//printf("dx width : %d\n",dx_width );
@@ -1498,26 +1493,8 @@ struct avg_layer_backprop avg_pool_der(vector<vector<vector<vector<F>>>> &derr,i
 			}
 		}
 	}
-
-	
-	printf("OK %d %d %d %d / %d %d %d %d\n", new_der.size(),new_der[0].size(),new_der[0][0].size(),new_der[0][0][0].size(),derr.size(),derr[0].size(),derr[0][0].size(),derr[0][0][0].size());
-	printf("Avg Pooling backprop dx width : %d\n", dx_width);
-	// for(int i = 0; i < batch; i++){
-	// 	for(int j = 0; j < derr[i].size(); j++){
-	// 		for(int k = 0; k < dx_width; k++){
-	// 			for(int h = 0; h < dx_width; h++){
-	// 				if (derr[i][j][k][h] != F(0)){
-	// 					std::cout << "Avg Pooling derr value at (" << i << "," << j << "," << k << "," << h << "): " << derr[i][j][k][h] << std::endl;
-	// 				}
-	// 				new_der[i][j][2*k][2*h] = derr[i][j][k][h];
-	// 				new_der[i][j][2*k+1][2*h] = derr[i][j][k][h];
-	// 				new_der[i][j][2*k][2*h+1] = derr[i][j][k][h];
-	// 				new_der[i][j][2*k+1][2*h+1] = derr[i][j][k][h];
-	// 			}
-	// 		}
-	// 	}
-	// }
-	// compute once (per layer) after you know sizes
+	// printf("OK %d %d %d %d / %d %d %d %d\n", new_der.size(),new_der[0].size(),new_der[0][0].size(),new_der[0][0][0].size(),derr.size(),derr[0].size(),derr[0][0].size(),derr[0][0][0].size());
+	// printf("Avg Pooling backprop dx width : %d\n", dx_width);
 	const int P = (int)derr[0][0].size();
 	const int d = dx_width;
 	const int W_out = old_w;
@@ -1531,7 +1508,7 @@ struct avg_layer_backprop avg_pool_der(vector<vector<vector<vector<F>>>> &derr,i
 	};
 
 	const int src = find_offset(derr[0][0]);
-	std::cout << "Avg Pooling backprop src offset: " << src << std::endl;
+	// std::cout << "Avg Pooling backprop src offset: " << src << std::endl;
 	const int dst = old_w - 2*dx_width;
 
     const F inv4 = F(4).inv();
@@ -1626,7 +1603,7 @@ struct convolutional_network back_propagation( struct convolutional_network net)
 
 	int real_dx_width = net.final_w; 
 	if(net.convolution_pooling[net.Filters.size() - 1] != 0){
-		printf("Avg Pooling backprop for last layer==============================\n");
+		// printf("Avg Pooling backprop for last layer==============================\n");
 		net.avg_backprop.push_back(avg_pool_der(der,real_dx_width,net.avg_layers[net.Filters.size() - 1].n));
 		real_dx_width *=2;
 	}

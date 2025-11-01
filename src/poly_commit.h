@@ -1,3 +1,5 @@
+#pragma once
+
 #include "config_pc.hpp"
 #include "merkle_tree.h"
 
