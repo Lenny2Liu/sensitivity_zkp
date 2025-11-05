@@ -85,8 +85,8 @@ double approximate_real_value(const F &value, int fractional_bits = Q) {
     scaled /= denom;
     scaled /= 16;
     // cout << "[debug] approximate_real_value: result=" << static_cast<double>(scaled) << endl;
-    cout << "[debug] approximate_real_value: scaled=" << scaled / denom << ", denom=" << denom << endl;
-    return static_cast<double>(scaled / denom);
+    cout << "[debug] approximate_real_value: scaled=" << scaled / denom / denom<< ", denom=" << denom << endl;
+    return static_cast<double>(scaled / denom );
 }
 
 void ensure_bound_above_norm(F &bound, F &bound_sq, const F &norm_sq, float &bound_value) {
@@ -366,121 +366,6 @@ void run_sensitivity_proof_demo() {
 }
 
 
-
-    // int relu_counter = static_cast<int>(net.relus.size()) - 1;
-
-    // for (int dense_idx = static_cast<int>(net.Weights.size()) - 1; dense_idx >= 0; --dense_idx) {
-    //     dense_layer_backprop dense_der = dense_backprop(out_der, net.fully_connected[dense_idx]);
-    //     out_der = dense_der.dx;
-    //     if (dense_idx == static_cast<int>(net.Weights.size()) - 1 && output_index == 0) {
-    //         long long sample_raw = 0;
-    //         if (!dense_der.dx_temp.empty() && !dense_der.dx_temp[0].empty()) {
-    //             sample_raw = static_cast<long long>(dense_der.dx_temp[0][0].toint128());
-    //             float sample_float = approximate_real_value(dense_der.dx_temp[0][0]);
-    //             cerr << "[debug] dense idx " << dense_idx << " dx_temp[0][0] float=" << sample_float << endl;
-    //         }
-    //         cerr << "[debug] dense idx " << dense_idx << " dx_temp[0][0] raw=" << sample_raw << endl;
-    //     }
-    //     dump_gradient("dense_backprop_layer_" + to_string(dense_idx),
-    //                   output_index,
-    //                   flatten_matrix(dense_der.dx));
-    //     net.fully_connected_backprop.push_back(dense_der);
-
-    //     vector<F> flattened = convert2vector(out_der);
-    //     relu_layer_backprop relu_der = relu_backprop(flattened, net.relus[relu_counter]);
-    //     for (int b = 0; b < batch; ++b) {
-    //         const int width = static_cast<int>(out_der[b].size());
-    //         for (int k = 0; k < width; ++k) {
-    //             out_der[b][k] = relu_der.dx[b * width + k];
-    //         }
-    //     }
-    //     dump_gradient("relu_backprop_after_dense_" + to_string(dense_idx),
-    //                   output_index,
-    //                   flatten_matrix(out_der));
-    //     net.relus_backprop.push_back(relu_der);
-    //     --relu_counter;
-    // }
-
-    // vector<vector<vector<vector<F>>>> der(batch);
-    // const int last_conv = static_cast<int>(net.Filters.size()) - 1;
-    // if (last_conv < 0) {
-    //     throw runtime_error("Sensitivity proof requires at least one convolutional layer");
-    // }
-    // for (int b = 0; b < batch; ++b) {
-    //     der[b].resize(net.final_out);
-    //     for (int ch = 0; ch < net.final_out; ++ch) {
-    //         der[b][ch].resize(net.flatten_n);
-    //         for (int row = 0; row < net.flatten_n; ++row) {
-    //             der[b][ch][row].assign(net.flatten_n, F_ZERO);
-    //         }
-    //         for (int row = 0; row < net.final_w; ++row) {
-    //             for (int col = 0; col < net.final_w; ++col) {
-    //                 der[b][ch][row][col] =
-    //                     out_der[b][net.final_w * net.final_w * ch + row * net.final_w + col];
-    //             }
-    //         }
-    //     }
-    // }
-    // dump_tensor_gradient("conv_init", output_index, der);
-
-    // int real_dx_width = net.final_w;
-    // if (!net.convolution_pooling.empty() && net.convolution_pooling.back() != 0) {
-    //     net.avg_backprop.push_back(avg_pool_der(der, real_dx_width, net.avg_layers.back().n));
-    //     real_dx_width *= 2;
-    //     dump_tensor_gradient("avg_pool_backprop_last", output_index, der);
-    // }
-
-    // for (int conv_idx = last_conv; conv_idx >= 0; --conv_idx) {
-    //     convolution_layer_backprop conv_der =
-    //         conv_backprop(der, real_dx_width, net.convolutions[conv_idx], net.Rotated_Filters[conv_idx]);
-    //     net.convolutions_backprop.push_back(conv_der);
-    //     dump_tensor_gradient("conv_backprop_layer_" + to_string(conv_idx), output_index, der);
-
-    //     if (conv_idx != 0) {
-    //         if (net.convolution_pooling[conv_idx - 1] != 0) {
-    //             net.avg_backprop.push_back(avg_pool_der(der, real_dx_width, net.avg_layers[conv_idx - 1].n));
-    //             real_dx_width *= 2;
-    //             dump_tensor_gradient("avg_pool_backprop_layer_" + to_string(conv_idx - 1),
-    //                                  output_index,
-    //                                  der);
-    //         }
-
-    //         int w = static_cast<int>(der[0][0].size());
-    //         net.der_dim.push_back(static_cast<int>(der.size() * der[0].size() * w * w));
-    //         if (static_cast<int>(der.size() * der[0].size() * w * w) !=
-    //             net.relus[relu_counter].most_significant_bits.size()) {
-    //             vector<vector<vector<vector<F>>>> temp(der.size());
-    //             net.der.push_back(der);
-
-    //             w /= 2;
-    //             net.w.push_back(w);
-    //             for (int b = 0; b < temp.size(); ++b) {
-    //                 temp[b].resize(der[b].size());
-    //                 for (int ch = 0; ch < temp[b].size(); ++ch) {
-    //                     temp[b][ch].resize(w);
-    //                     for (int row = 0; row < w; ++row) {
-    //                         temp[b][ch][row].resize(w);
-    //                         for (int col = 0; col < w; ++col) {
-    //                             temp[b][ch][row][col] = der[b][ch][row][col];
-    //                         }
-    //                     }
-    //                 }
-    //             }
-    //             der = temp;
-    //         }
-
-    //         vector<F> flattened = tensor2vector(der);
-    //         relu_layer_backprop relu_der = relu_backprop(flattened, net.relus[relu_counter]);
-    //         der = vector2tensor(relu_der.dx, der, static_cast<int>(der[0][0].size()));
-    //         dump_tensor_gradient("relu_backprop_conv_layer_" + to_string(conv_idx - 1),
-    //                              output_index,
-    //                              der);
-    //         net.relus_backprop.push_back(relu_der);
-    //         --relu_counter;
-    //     }
-    // }
-
-
 namespace {
 inline double u01_from_mimc(F &state) {
     mimc_hash(state, current_randomness);
@@ -635,7 +520,7 @@ GaussAvgSensitivityResult gaussian_sampled_average_sensitivity_backprop(convolut
     return R;
 }
 
-// In sensitive_proof.cpp
+
 void run_gaussian_sampled_sensitivity_demo() {
     const int batch_size = 1;
     const int channels = 1;
@@ -663,3 +548,118 @@ void run_gaussian_sampled_sensitivity_demo() {
     std::cout << "  Total backprop proof size ≈ " << kb_backprop << " KB\n";
     std::cout << "  Averaging (sum+division+range) proofs size ≈ " << kb_avg << " KB\n";
 }
+
+
+namespace {
+
+static inline vector<vector<vector<vector<F>>>> scale_tensor(
+        const vector<vector<vector<vector<F>>>> &X, float alpha) {
+    vector<vector<vector<vector<F>>>> Y = X;
+    const F a = quantize(alpha);
+    for (int b = 0; b < (int)X.size(); ++b)
+        for (int c = 0; c < (int)X[b].size(); ++c)
+            for (int r = 0; r < (int)X[b][c].size(); ++r)
+                for (int col = 0; col < (int)X[b][c][r].size(); ++col)
+                    Y[b][c][r][col] = a * X[b][c][r][col];
+    return Y;
+}
+
+int final_output_dimension(const convolutional_network &net);
+
+} 
+
+struct IntegratedGradientsResult {
+    vector<F> ig_column;
+    int steps = 0;
+    vector<vector<vector<struct proof>>> per_step_per_output_backprop;
+};
+
+IntegratedGradientsResult integrated_gradients_single_feature(
+        convolutional_network base_net,
+        const vector<vector<vector<vector<F>>>> &X,
+        int feature_index,
+        int steps) 
+    {
+
+    const int total_features = input_feature_count(X);
+    if (feature_index < 0 || feature_index >= total_features)
+        throw runtime_error("[IG] feature_index out of range");
+
+    const vector<F> X_flat = tensor2vector(X);
+    const F x_i = X_flat[feature_index];
+
+    {
+        auto X0 = X;
+        auto tmp = base_net;
+        tmp = feed_forward(X0, tmp, (int)X[0].size());
+        (void) final_output_dimension(tmp);
+    }
+    auto net0 = base_net;
+    auto X0   = X;
+    net0 = feed_forward(X0, net0, (int)X[0].size());
+    const int m = final_output_dimension(net0);
+    std::cout << m << " outputs in the network.\n" << std::endl;
+
+    vector<F> ig_col(m, F_ZERO);
+    vector<vector<vector<struct proof>>> proofs(m);
+    for (int j = 0; j < m; ++j) proofs[j].reserve(steps + 1);
+
+    for (int t = 0; t <= steps; ++t) {
+        const float alpha = (float)t / (float)steps;
+        const float wt    = (t == 0 || t == steps) ? (0.5f / steps) : (1.0f / steps);
+
+        auto X_t = scale_tensor(X, alpha);
+        auto net_t = base_net;
+        net_t = feed_forward(X_t, net_t, (int)X[0].size());
+
+        for (int j = 0; j < m; ++j) {
+            GradientComputation comp = compute_input_gradient(net_t, j, X_t);
+            for (size_t i = 0; i < comp.gradient_flat.size(); i++) {
+                if (i == feature_index) {
+                    cout << "  [" << i << "] = " << approximate_real_value(comp.gradient_flat[i])
+                        << " (raw=" << static_cast<long long>(comp.gradient_flat[i].toint128()) << ")"
+                        << " <-- selected feature" << endl;
+                }
+            }
+            const F gji = comp.gradient_flat[feature_index];
+            F incr = gji;
+            if (wt != 1.0f) incr = incr * quantize(wt);
+            incr = incr * x_i;
+            ig_col[j] = ig_col[j] + incr;
+            Transcript.clear();
+            prove_backprop(comp.annotated_net);
+            proofs[j].push_back(Transcript);
+            Transcript.clear();
+            std::cout << "current IG step " << t << "/" << steps << " for output " << j << std::endl;
+        }
+    }
+
+    IntegratedGradientsResult R;
+    R.ig_column = std::move(ig_col);
+    R.steps = steps;
+    R.per_step_per_output_backprop = std::move(proofs);
+    return R;
+}
+
+void run_integrated_gradients_demo() {
+    const int batch_size = 1;
+    const int channels = 1;
+    const int feature_index = 199;
+    const int steps = 1;
+
+    convolutional_network net = init_network(MODEL_LENET, batch_size, channels);
+
+    vector<vector<vector<vector<F>>>> X;
+    net = feed_forward(X, net, channels);
+
+    auto R = integrated_gradients_single_feature(net, X, feature_index, steps);
+
+    std::cout << "[IG] feature " << feature_index << ", steps=" << steps << "\n";
+
+    double kb_backprop = 0.0;
+    for (auto &per_out : R.per_step_per_output_backprop)
+        for (auto &pf : per_out) kb_backprop += proof_size(pf);
+    std::cout << "  Backprop proof size (sum over steps*outputs): "
+              << kb_backprop << " KB\n";
+}
+
