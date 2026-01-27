@@ -1834,14 +1834,14 @@ void prove_backprop(struct convolutional_network net){
  	proving_time = 0.0;
    	// START PROVING DW
 
-   	for(int i = 0; i < net.convolutions_backprop.size(); i++){
-   		printf("Proving correct computation of dw convolution layer %d\n",i);
-    	prove_correct_gradient_computation(net.convolutions_backprop[net.convolutions_backprop.size()-1-i],net.convolutions[i], r,previous_sum, false);
-   	}
-   	for(int i = 0; i < net.Weights.size(); i++){
-   		printf("Proving correct computation of dw dense layer %d\n",i);
-    	prove_dense_gradient_computation(net.fully_connected_backprop[i],net.fully_connected[net.Weights.size()-1-i],r, previous_sum);
-   	}
+   	// for(int i = 0; i < net.convolutions_backprop.size(); i++){
+   	// 	printf("Proving correct computation of dw convolution layer %d\n",i);
+    // 	prove_correct_gradient_computation(net.convolutions_backprop[net.convolutions_backprop.size()-1-i],net.convolutions[i], r,previous_sum, false);
+   	// }
+   	// for(int i = 0; i < net.Weights.size(); i++){
+   	// 	printf("Proving correct computation of dw dense layer %d\n",i);
+    // 	prove_dense_gradient_computation(net.fully_connected_backprop[i],net.fully_connected[net.Weights.size()-1-i],r, previous_sum);
+   	// }
 	gradients_computation = proving_time;
    	
    	

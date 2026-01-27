@@ -29,7 +29,7 @@
 
 void run_sensitivity_proof_demo();
 void run_gaussian_sampled_sensitivity_demo();
-// void run_integrated_gradients_demo();
+void run_integrated_gradients_demo();
 
 extern int partitions;
 
@@ -63,10 +63,10 @@ int main(int argc, char *argv[]){
 		run_gaussian_sampled_sensitivity_demo();
 		return 0;
 	}
-	// if (argc >= 2 && strcmp(argv[1], "SIG") == 0) {
-	// 	run_integrated_gradients_demo();
-	// 	return 0;
-	// }
+	if (argc >= 2 && strcmp(argv[1], "SIG") == 0) {
+		run_integrated_gradients_demo();
+		return 0;
+	}
    	if(strcmp(argv[1],"LENET") == 0){
    		input_dim = 32;
    		printf("Lenet\n");

@@ -39,6 +39,7 @@ struct relu_layer{
 struct avg_layer{
 	vector<vector<F>> U,Out,Sum,Remainder,Out_temp;
 	int Batch_size, chout,w,n,window,padded_w;
+	int pool_type;
 
 
 };

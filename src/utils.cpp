@@ -229,7 +229,12 @@ vector<vector<vector<vector<F>>>> vector2tensor(vector<F> v,vector<vector<vector
             for(int k = 0; k < w_pad; k++){
                 M_new[i][j][k].resize(w_pad);
                 for(int l = 0; l < w_pad; l++){
-                    M_new[i][j][k][l] = v[i*N*w*w + j*w*w + k*w + l];
+                    size_t idx = static_cast<size_t>(i)*N*w*w + static_cast<size_t>(j)*w*w + static_cast<size_t>(k)*w + l;
+                    if(idx < v.size()){
+                        M_new[i][j][k][l] = v[idx];
+                    }else{
+                        M_new[i][j][k][l] = F(0);
+                    }
                     //V.push_back(M[i][j][k][l]);
                 }
             }

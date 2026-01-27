@@ -9,6 +9,7 @@
 #define TEST 3
 #define AlexNet 4
 #define mAlexNet 5
+#define SUPERNET 6
 
 
 extern unsigned long int mul_counter;
@@ -278,9 +279,14 @@ vector<F> index_w(vector<vector<F>> w, int n,int real_n){
 	for(int i = 0; i < vec.size(); i++){
 		vec[i] = F(0);
 	}
-	for(int i = 0; i < w.size(); i++){
-		for(int j = 0; j < w[i].size(); j++){
-			vec[real_n*i+j] = (w[i][j]);
+	const int max_rows = std::min((int)w.size(), real_n);
+	for(int i = 0; i < max_rows; i++){
+		const int max_cols = std::min((int)w[i].size(), real_n);
+		for(int j = 0; j < max_cols; j++){
+			const size_t idx = static_cast<size_t>(real_n)*i + j;
+			if(idx < vec.size()){
+				vec[idx] = w[i][j];
+			}
 		}
 	}
 	
@@ -326,9 +332,14 @@ struct relu_layer _relu_layer(vector<F> input){
 	relu_data.Q_max = Q_max;
 	relu_data.output.resize(input.size(),F_ZERO);
 	relu_data.temp_output.resize(input.size(),F_ZERO);
+	const int bit_start = (Q_max >= (Q - 1)) ? (Q_max - (Q - 1)) : 0;
 	for(int i = 0; i < input.size(); i++){
 		for(int j = 0; j < Q; j++){
-			relu_data.temp_output[i] += pow[j]*relu_data.input_bits[i*64 + Q_max - Q + j + 1];
+			const int bit_index = bit_start + j;
+			if(bit_index >= 64){
+				break;
+			}
+			relu_data.temp_output[i] += pow[j]*relu_data.input_bits[i*64 + bit_index];
 		}
 		if(relu_data.most_significant_bits[i] == F_ONE){
 			relu_data.output[i] = F_ZERO;
@@ -393,6 +404,37 @@ vector<vector<F>> _flatten_layer(vector<vector<F>> X, int n, int chout, int w){
 }
 
 
+static void ensure_min_padded_width(struct avg_layer &layer, int min_w) {
+	if (min_w <= 0) {
+		return;
+	}
+	int target_w = layer.padded_w;
+	if (target_w <= 0) {
+		target_w = 1;
+	}
+	while (target_w < min_w) {
+		target_w <<= 1;
+	}
+	const size_t padded_len = static_cast<size_t>(target_w) * static_cast<size_t>(target_w);
+	auto pad_rows = [&](std::vector<std::vector<F>> &rows) {
+		for (auto &row : rows) {
+			if (row.size() < padded_len) {
+				row.resize(padded_len, F(0));
+			}
+		}
+	};
+	pad_rows(layer.Out);
+	pad_rows(layer.Sum);
+	pad_rows(layer.Remainder);
+	layer.padded_w = target_w;
+	const int expand_factor = (layer.pool_type == 1) ? 2 : 1;
+	const int min_pre_pool_w = target_w * expand_factor;
+	if(layer.w < min_pre_pool_w){
+		layer.w = min_pre_pool_w;
+	}
+}
+
+
 struct avg_layer avg(vector<F> input , int chout,int w, int n, int window,int pool_type){
 	struct avg_layer avg_data;
 	vector<vector<F>> U(chout*batch);
@@ -407,6 +449,7 @@ struct avg_layer avg(vector<F> input , int chout,int w, int n, int window,int po
 	avg_data.w = w;
 	avg_data.n = n;
 	avg_data.window = window;
+	avg_data.pool_type = pool_type;
 	avg_data.U = U;
 	//printf("AVG DATA : w :  %d , n :  %d , window  :%d , Mod : %d\n",w,n,window ,pool_type);
 	// If pool type is avg perform averaging
@@ -669,6 +712,56 @@ struct convolution_layer conv(vector<vector<vector<vector<F>>>> input,vector<vec
 	return conv_data;
 }
 
+#include <fstream>
+#include <stdexcept>
+
+std::vector<std::vector<std::vector<std::vector<F>>>>
+load_conv_weights(const std::string &filename, int ch_out, int ch_in, int k) {
+    std::ifstream fin(filename);
+    if (!fin) {
+        throw std::runtime_error("Cannot open conv weight file: " + filename);
+    }
+    std::vector<std::vector<std::vector<std::vector<F>>>> W(
+        ch_out,
+        std::vector<std::vector<std::vector<F>>>(ch_in,
+            std::vector<std::vector<F>>(k, std::vector<F>(k)))
+    );
+    for (int oc = 0; oc < ch_out; ++oc) {
+        for (int ic = 0; ic < ch_in; ++ic) {
+            for (int i = 0; i < k; ++i) {
+                for (int j = 0; j < k; ++j) {
+                    double tmp;
+                    if (!(fin >> tmp)) {
+                        throw std::runtime_error("Not enough values in " + filename);
+                    }
+                    W[oc][ic][i][j] = quantize(tmp);  // cast to your fixed-point type
+                }
+            }
+        }
+    }
+    return W;
+}
+
+std::vector<std::vector<F>>
+load_dense_weights(const std::string &filename, int out, int in) {
+    std::ifstream fin(filename);
+    if (!fin) {
+        throw std::runtime_error("Cannot open dense weight file: " + filename);
+    }
+    std::vector<std::vector<F>> W(out, std::vector<F>(in));
+    for (int o = 0; o < out; ++o) {
+        for (int i = 0; i < in; ++i) {
+            double tmp;
+            if (!(fin >> tmp)) {
+                throw std::runtime_error("Not enough values in " + filename);
+            }
+            W[o][i] = quantize(tmp);
+        }
+    }
+    return W;
+}
+
+
 
 struct convolutional_network init_network(int selected_model,int batch_size,int channels){
 	model = selected_model;
@@ -699,16 +792,33 @@ struct convolutional_network init_network(int selected_model,int batch_size,int 
 		}
 		net.Weights = add_dense(net.Weights,128,32);
 		net.Weights = add_dense(net.Weights,32,16);
-	}else if(model == VGG){
-		//62
-		//60
-		//28
-		//26
-		//24
-		//10
-		//8
-		//4
 
+		// std::string base = "/home/ubuntu/kaizen/models/adult_conv/";
+		// auto c0 = load_conv_weights(base + "conv0_weight.txt", 4, channels, 5);
+		// net.Filters[0] = c0;
+		// auto c1 = load_conv_weights(base + "conv1_weight.txt", 16, 4, 5);
+		// net.Filters[1] = c1;
+		// auto c2 = load_conv_weights(base + "conv2_weight.txt", 128, 16, 5);
+		// net.Filters[2] = c2;
+		// net.Rotated_Filters.resize(net.Filters.size());
+		// for (int i = 0; i < net.Filters.size(); ++i) {
+		// 	net.Rotated_Filters[i].resize(net.Filters[i].size());
+		// 	for (int j = 0; j < net.Filters[i].size(); ++j) {
+		// 		net.Rotated_Filters[i][j].resize(net.Filters[i][j].size());
+		// 		for (int k = 0; k < net.Filters[i][j].size(); ++k) {
+		// 			net.Rotated_Filters[i][j][k] = rotate(net.Filters[i][j][k]);
+		// 		}
+		// 	}
+		// }
+		// auto fc0 = load_dense_weights(base + "fc0_weight.txt", 32, 128);
+		// net.Weights[0] = fc0;
+		// std::cout << net.Weights[0].size() << " x " << net.Weights[0][0].size() << std::endl;
+
+		// auto fc1 = load_dense_weights(base + "fc1_weight.txt", 16, 32);
+		// net.Weights[1] = fc1;
+
+// VGG has error in pooling, caused by conv error, dont use now!!!!!!
+	}else if(model == VGG){
 		net.Filters = add_filter(net.Filters,8,channels,3);  // 60 
 		net.convolution_pooling.push_back(0);
 		net.Filters = add_filter(net.Filters,8,8,3); // 28
@@ -834,7 +944,54 @@ struct convolutional_network init_network(int selected_model,int batch_size,int 
 		net.Weights = add_dense(net.Weights,32*8*8,2*1024);
 		net.Weights = add_dense(net.Weights,2*1024,512);
 		net.Weights = add_dense(net.Weights,512,16);
-	}
+} else if (model == SUPERNET) {
+    // Super-LeNet-64:
+    //  - 64x64 input
+    //  - 3 conv layers with 5x5 kernels
+    //  - avg-pool after first two convs (LeNet-style)
+    //  - keep a 4x4 spatial grid before the dense layers
+
+    // Conv0: channels -> 64, 5x5, followed by 2x2 avg-pool
+    net.Filters = add_filter(net.Filters, 16, channels, 5);
+    net.convolution_pooling.push_back(1);
+
+    net.Filters = add_filter(net.Filters, 64, 16, 5);
+    net.convolution_pooling.push_back(1);
+
+    net.Filters = add_filter(net.Filters, 256, 64, 5);
+    net.convolution_pooling.push_back(0);
+
+    // Number of channels and spatial size we expose to the dense layers
+    net.final_out = 256;
+    net.final_w   = 1;          // any f <= 10 is safe; we choose 4
+
+    std::cout << "Initializing SuperNet-64 (Super-LeNet) with final conv output size: "
+              << net.final_out << " x " << net.final_w << " x " << net.final_w << std::endl;
+
+    // Rotate filters for convolution backprop
+    net.Rotated_Filters.resize(net.Filters.size());
+    for (int i = 0; i < (int)net.Filters.size(); ++i) {
+        net.Rotated_Filters[i].resize(net.Filters[i].size());
+        for (int j = 0; j < (int)net.Filters[i].size(); ++j) {
+            net.Rotated_Filters[i][j].resize(net.Filters[i][j].size());
+            for (int k = 0; k < (int)net.Filters[i][j].size(); ++k) {
+                net.Rotated_Filters[i][j][k] = rotate(net.Filters[i][j][k]);
+            }
+        }
+    }
+
+    // First dense layer input dimension:
+    // conv_out_channels * final_w * final_w = 128 * 4 * 4 = 2048
+    const int dense_in0 = net.final_out * net.final_w * net.final_w;  // 2048
+
+    net.Weights = add_dense(net.Weights, 256, 128);  // big hidden layer
+    net.Weights = add_dense(net.Weights, 128, 16);
+    // net.Weights = add_dense(net.Weights, 2048, 16);         // 16 outputs as before
+
+    // std::cout << "SuperNet-64 dense stack: "
+    //           << dense_in0 << " -> 4096 -> 2048 -> 16" << std::endl;
+}
+
 	else{
 		net.Filters = add_filter(net.Filters,32,channels,7); // 56
 		net.convolution_pooling.push_back(1);
@@ -886,6 +1043,27 @@ vector<vector<vector<vector<F>>>> organize_data(vector<vector<F>> data,int chin,
 }
 
 
+static void pad_tensor_inplace(vector<vector<vector<vector<F>>>> &tensor, int target_w) {
+	if (tensor.empty() || tensor[0].empty() || tensor[0][0].empty()) return;
+	const int current_w = tensor[0][0].size();
+	if (current_w >= target_w) return;
+	for (auto &batch_item : tensor) {
+		for (auto &channel : batch_item) {
+			const int existing_rows = channel.size();
+			if (existing_rows < target_w) {
+				channel.resize(target_w);
+				for (int r = existing_rows; r < target_w; ++r) {
+					channel[r].assign(target_w, F(0));
+				}
+			}
+			for (auto &row : channel) {
+				row.resize(target_w, F(0));
+			}
+		}
+	}
+}
+
+
 void check_relu(vector<vector<vector<vector<F>>>> &input){
 	char buff[257];
 	for(int i = 0; i < input.size(); i++){
@@ -913,7 +1091,7 @@ struct convolutional_network feed_forward(vector<vector<vector<vector<F>>>> &X, 
 	else{
 		input = init_input(32,channels);
 	}
-	if (!X.empty()) input = X;
+	// if (!X.empty()) input = X;
 	vector<vector<vector<vector<F>>>> Z_conv;
 	vector<vector<F>> Z(batch);
 	vector<vector<vector<vector<F>>>> real_input;
@@ -928,6 +1106,9 @@ struct convolutional_network feed_forward(vector<vector<vector<vector<F>>>> &X, 
 	
 	for(int i = 0; i < net.Filters.size(); i++){
 		if(i == 0){
+			if(!X.empty()){
+				pad_tensor_inplace(X, net.Filters[i][0][0].size());
+			}
 			conv_data = conv(X,real_input,net.Filters[i],true);
 			
 			conv_data.idx = i;
@@ -939,7 +1120,10 @@ struct convolutional_network feed_forward(vector<vector<vector<vector<F>>>> &X, 
 			
 			
 			avg_data = avg(relu_data.output, conv_data.chout,conv_data.n - conv_data.w + 1, conv_data.n, conv_data.window,net.convolution_pooling[i]);
-			
+			if(i + 1 < net.Filters.size() && !net.Filters[i + 1].empty() && !net.Filters[i + 1][0].empty()){
+				const int next_kernel = net.Filters[i + 1][0][0].size();
+				ensure_min_padded_width(avg_data, next_kernel);
+			}
 			net.avg_layers.push_back(avg_data);
 			Z_conv = organize_data(avg_data.Out,net.Filters[i].size(),avg_data.padded_w);
 			//printf("New Input dim : %d,%d,%d,%d\n", Z_conv.size(),Z_conv[0].size(),Z_conv[0][0].size(),Z_conv[0][0][0].size());
@@ -947,6 +1131,9 @@ struct convolutional_network feed_forward(vector<vector<vector<vector<F>>>> &X, 
 		else if(i ==  net.Filters.size()-1){
 			//printf("FINAL CONV\n");
 			//printf("%d,%d,%d\n",Z_conv.size(),Z_conv[0].size(),Z_conv[0][0].size());
+			if(!Z_conv.empty()){
+				pad_tensor_inplace(Z_conv, net.Filters[i][0][0].size());
+			}
 			conv_data = conv(Z_conv,real_input,net.Filters[i],false);	
 			conv_data.idx = i;
 			net.convolutions.push_back(conv_data);
@@ -993,6 +1180,9 @@ struct convolutional_network feed_forward(vector<vector<vector<vector<F>>>> &X, 
 			}
 		}
 		else{
+			if(!Z_conv.empty()){
+				pad_tensor_inplace(Z_conv, net.Filters[i][0][0].size());
+			}
 			conv_data = conv(Z_conv,real_input,net.Filters[i],true);
 			conv_data.idx = i;
 			net.convolutions.push_back(conv_data);
@@ -1001,6 +1191,10 @@ struct convolutional_network feed_forward(vector<vector<vector<vector<F>>>> &X, 
 			//check_relu(real_input);
 			net.relus.push_back(relu_data);
 			avg_data = avg(relu_data.output, conv_data.chout,conv_data.n - conv_data.w + 1, conv_data.n, conv_data.window,net.convolution_pooling[i]);
+			if(i + 1 < net.Filters.size() && !net.Filters[i + 1].empty() && !net.Filters[i + 1][0].empty()){
+				const int next_kernel = net.Filters[i + 1][0][0].size();
+				ensure_min_padded_width(avg_data, next_kernel);
+			}
 			net.avg_layers.push_back(avg_data);
 		
 			Z_conv = organize_data(avg_data.Out,net.Filters[i].size(),avg_data.padded_w);
@@ -1206,9 +1400,6 @@ struct dense_layer_backprop dense_backprop(vector<vector<F>> &dx,struct fully_co
 
 	//printf("new dx : (%d,%d), dw : (%d,%d)\n",dense_der.dx.size(),dense_der.dx[0].size(),dense_der.dw.size(),dense_der.dw[0].size());
 	dx = dense_der.dx;
-	// std::cout << "Dense layer dx : " << std::endl;
-	// virgo::printNested(dense_der.dx,std::cout);
-	// std::cout << std::endl;
 	return dense_der;
 }
 
@@ -1445,12 +1636,10 @@ struct convolution_layer_backprop conv_backprop(vector<vector<vector<vector<F>>>
 
 }
 
+
 struct avg_layer_backprop avg_pool_der(vector<vector<vector<vector<F>>>> &derr,int dx_width, int old_w){
 	// Computing avg pool derivative. This will be done with a circuit that 
 	// takse U_dx and returns new_der
-	std::ofstream fout("der_values.txt", std::ios::app);
-	virgo::printNested(derr, fout);
-	fout << std::endl;
 	struct avg_layer_backprop avg_data;
 	vector<vector<vector<vector<F>>>> new_der(batch),new_dx(batch);
 	for(int i = 0; i < derr.size(); i++){
@@ -1501,24 +1690,35 @@ struct avg_layer_backprop avg_pool_der(vector<vector<vector<vector<F>>>> &derr,i
 	auto find_offset = [&](const auto &A)->int {
 		int P = (int)A.size();
 		int row = P, col = P;
+		bool allzero = true;
 		for (int r = 0; r < P; ++r)
 			for (int c = 0; c < P; ++c)
-				if (A[r][c] != F(0)) { row = std::min(row, r); col = std::min(col, c); }
+				if (A[r][c] != F(0)) { 
+					allzero = false;
+					row = std::min(row, r); 
+					col = std::min(col, c); 
+				}
+
+		if (allzero) return 0;
 		return std::min(row, col);
 	};
 
 	const int src = find_offset(derr[0][0]);
-	// std::cout << "Avg Pooling backprop src offset: " << src << std::endl;
 	const int dst = old_w - 2*dx_width;
+
 
     const F inv4 = F(4).inv();
 
+	std::cout << "Avg Pooling backprop src: " << src << ", dst: " << dst << ", d: " << d << ", W_out: " << W_out << std::endl;
+	std::cout << "size of input derr " << derr.size() << ", " << derr[0].size() << ", " << derr[0][0].size() << ", " << derr[0][0][0].size() << std::endl;
     for (int i = 0; i < batch; ++i) {
       for (int j = 0; j < (int)derr[i].size(); ++j) {
         for (int k = 0; k < d; ++k) {
           for (int h = 0; h < d; ++h) {
+			
             const F g = derr[i][j][src + k][src + h];
             const int r = dst + 2*k, c = dst + 2*h;
+			// std::cout << "g " << g << " at derr[" << i << "][" << j << "][" << src + k << "][" << src + h << "]" << std::endl;
             new_der[i][j][r][c] = g; // * inv4;
             new_der[i][j][r + 1][c] = g; // * inv4;
             new_der[i][j][r][c + 1] = g; //  * inv4;
@@ -1529,25 +1729,24 @@ struct avg_layer_backprop avg_pool_der(vector<vector<vector<vector<F>>>> &derr,i
 	}
 
 	derr = new_der;
+	// for (int i = 0; i < batch; ++i) {
+	// 	for (int j = 0; j < (int)derr[i].size(); ++j) {
+	// 		for (int k = 0; k < derr[i][j].size(); ++k) {
+	// 			for (int h = 0; h < derr[i][j][k].size(); ++h) {
+	// 				std::cout << derr[i][j][ k][h] << " ";
+	// 			}
+	// 		}
+	// 	}
+	// }
+
 	for(int i = 0; i < derr.size(); i++){
 		for(int j = 0; j < derr[i].size(); j++){
 			avg_data.dx.push_back(convert2vector(derr[i][j]));
 		}
 	}
-
-    
-    if (!fout) {
-        std::cerr << "Error: cannot open file for writing.\n";
-    }
-
-    virgo::printNested(avg_data.dx, fout);
-    fout << std::endl;
-    fout.close();
 	avg_data.dx_window_bit = (int)log2(dx_width);
 	return avg_data;
 }
-
-
 
 
 struct convolutional_network back_propagation( struct convolutional_network net){
@@ -1556,18 +1755,13 @@ struct convolutional_network back_propagation( struct convolutional_network net)
 	struct relu_layer_backprop relu_der;
 	int relu_counter = net.relus.size()-1;
 	int in_size;
+	//printf("Calculating Backpropagation Circuit\n");
 	vector<vector<vector<vector<F>>>> der(batch),dx(batch);
 	vector<vector<F>> out_der(batch),dense_dx(batch);
 	for(int i = 0; i < batch; i++){
 		out_der[i] = initialize_filter(16);
 	}
 
-	for (int b = 0; b < batch; ++b) {
-        out_der[b].assign(16, F_ZERO);
-    }
-    out_der[0][1] = quantize(1.0f);
-	// virgo::printNested(out_der, std::cout);
-	// std::cout << std::endl;
 	for(int i = net.Weights.size()-1; i >= 0; i--){
 		dense_der = dense_backprop(out_der,net.fully_connected[i]);
 		net.fully_connected_backprop.push_back(dense_der);
@@ -1586,33 +1780,50 @@ struct convolutional_network back_propagation( struct convolutional_network net)
 	int last_conv = net.Filters.size()-1;
 	for(int i = 0; i < der.size(); i++){
 		der[i].resize(net.final_out);
+		//dx[i].resize(net.final_out);
 		for(int j = 0; j < der[i].size(); j++){
 			der[i][j].resize(net.flatten_n);
+			//der[i][j].resize(net.convolutions[last_conv].n);
+			//dx[i][j].resize(net.final_w);
 			for(int k = 0; k < der[i][j].size(); k++){
 				for(int l = 0; l < der[i][j].size(); l++){
 					der[i][j][k].push_back(F(0));
 				}
 			}
+			//for(int k = 0; k < dx[i][j].size(); k++){
+				//dx[i][j][k].resize(net.final_w);
+			//}
+			
 			for(int k = 0; k < net.final_w; k++){
 				for(int l = 0; l < net.final_w; l++){
+					//dx[i][j][k][l] = out_der[i][net.final_w*net.final_w*j + k*net.final_w + l];
 					der[i][j][k][l] = out_der[i][net.final_w*net.final_w*j + k*net.final_w + l];
 				}
 			}
 		}
 	}
-
 	int real_dx_width = net.final_w; 
+	//printf("Der : %d,%d,%d / dx : %d,%d,%d / in_size : %d/ n : %d\n", der.size(),der[0].size(),der[0][0].size(),dx.size(),dx[0].size(),dx[0][0].size(),in_size,net.convolutions[last_conv].n);
+	
 	if(net.convolution_pooling[net.Filters.size() - 1] != 0){
-		// printf("Avg Pooling backprop for last layer==============================\n");
+		//printf("FIRST AVG : %d,%d,%d,%d \n",der.size(),der[0].size(),der[0][0].size(),real_dx_width );
+
 		net.avg_backprop.push_back(avg_pool_der(der,real_dx_width,net.avg_layers[net.Filters.size() - 1].n));
+		//printf("FIRST AVG : %d,%d,%d,%d \n",der.size(),der[0].size(),der[0][0].size(),real_dx_width );
 		real_dx_width *=2;
 	}
+	//printf("Der : %d,%d,%d / dx : %d,%d,%d / in_size : %d/ n : %d\n", der.size(),der[0].size(),der[0][0].size(),dx.size(),dx[0].size(),dx[0][0].size(),in_size,net.convolutions[last_conv].n);
+	
 	for(int i = net.Filters.size() - 1; i >= 0; i--){
 		
 		net.convolutions_backprop.push_back(conv_backprop(der,real_dx_width,net.convolutions[i],net.Rotated_Filters[i]));
+		//printf("DX : (%d,%d,%d,%d) , Der : (%d,%d,%d,%d)\n",dx.size(),dx[0].size(),dx[0][0].size(),dx[0][0][0].size(),der.size(),der[0].size(),der[0][0].size(),der[0][0][0].size() );
+		//printf("Conv %d, pos : %d \n",i,net.convolutions_backprop.size());
 		if(i != 0){
+			//printf("POOL %d\n", net.convolution_pooling[i-1]);
 			if(net.convolution_pooling[i-1] != 0){
 				net.avg_backprop.push_back(avg_pool_der(der,real_dx_width,net.avg_layers[i-1].n));
+				//printf("Avg %d, pos : %d \n",i,net.avg_backprop.size());
 				real_dx_width *= 2;
 			}
 			

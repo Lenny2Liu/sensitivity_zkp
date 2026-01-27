@@ -2,6 +2,8 @@
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
+#include <fstream>
+#include <sstream>
 #include "CNN.h"
 #include "proof.h"
 #include "GKR.h"
@@ -28,6 +30,92 @@ vector<vector<vector<vector<F>>>> batch_convolution_der(vector<vector<vector<vec
                                                         vector<vector<vector<vector<F>>>> w);
 
 static constexpr int MODEL_LENET = 1;
+static constexpr int SUPERNET = 6;
+
+
+template<typename T>
+size_t count_5d(const vector<vector<vector<vector<vector<T>>>>>& A) {
+    size_t total = 0;
+    for (const auto& v1 : A)
+        for (const auto& v2 : v1)
+            for (const auto& v3 : v2)
+                for (const auto& v4 : v3)
+                    total += v4.size();
+    return total;
+}
+
+template<typename T>
+size_t count_3d(const vector<vector<vector<T>>>& A) {
+    size_t total = 0;
+    for (const auto& v1 : A)
+        for (const auto& v2 : v1)
+            total += v2.size();
+    return total;
+}
+
+size_t count_parameters(const convolutional_network& net) {
+    size_t total = 0;
+    total += count_5d(net.Filters);
+    total += count_3d(net.Weights);
+    return total;
+}
+
+
+struct JacobianResult {
+    std::vector<std::vector<F>> J_rows_fixed;
+    std::vector<std::vector<std::vector<struct proof>>> proofs_per_row;
+};
+
+extern std::vector<struct proof> Transcript;
+extern void prove_backprop(convolutional_network net);
+
+
+static inline int _depth_from_fractional_bits(int fractional_bits) {
+    if (fractional_bits <= 0) return 1;
+    int d = (fractional_bits + Q - 1) / Q;
+    return d < 1 ? 1 : d;
+}
+
+static int effective_gradient_depth(const convolutional_network& net) {
+    int seed = 1;
+    int n_fc = (int)net.Weights.size(); 
+    int n_conv = (int)net.Filters.size();
+    int n_pool_q = 0; 
+    for (int i = 0; i < (int)net.convolution_pooling.size(); ++i) {
+        if (net.convolution_pooling[i] != 0) {
+            n_pool_q += 1;
+        }
+    }
+
+    int depth = seed + n_fc + n_conv - n_pool_q;
+
+    if (depth < 1) depth = 1;
+    return depth;
+}
+
+static inline double decode_gradient_true(const F& v, int eff_depth) {
+    return (double)dequantize(v, eff_depth);
+}
+
+static void print_selected_feature_column_true_with_depth(const std::vector<std::vector<F>>& J,
+                                                         int feature_index,
+                                                         int eff_depth) {
+    const int m = (int)J.size();
+    if (m == 0) return;
+    const int d = (int)J[0].size();
+    if (feature_index < 0 || feature_index >= d) throw std::runtime_error("feature index OOB");
+
+    std::cout << "[decode] using depth=" << eff_depth << " (dividing by (1<<Q)^depth)\n";
+    for (int j = 0; j < m; ++j) {
+        const F val = J[j][feature_index];
+        const long long raw = (long long)val.toint128();
+        const double v_true = decode_gradient_true(val, eff_depth);
+        std::cout << "  dy[" << j << "]/dx[" << feature_index << "] = " << v_true
+                  << " (raw=" << raw << ")\n";
+    }
+}
+
+
 
 struct SensitivityProofResult {
     vector<F> gradient_column;
@@ -36,6 +124,8 @@ struct SensitivityProofResult {
     float bound_value = 0.0f;
     vector<vector<struct proof>> gradient_proofs;
     vector<struct proof> norm_bound_proof;
+    vector<F> linear_mask;
+    F masked_derivative = F_ZERO;
 };
 
 namespace {
@@ -79,14 +169,8 @@ int input_feature_count(const vector<vector<vector<vector<F>>>> &input_tensor) {
 }
 
 double approximate_real_value(const F &value, int fractional_bits = Q) {
-    long double scaled = static_cast<long double>(value.toint128());
-    // cout << "[debug] approximate_real_value: scaled=" << scaled << ", fractional_bits=" << fractional_bits << endl;
-    long double denom = std::ldexp(1.0L, fractional_bits);
-    scaled /= denom;
-    scaled /= 16;
-    // cout << "[debug] approximate_real_value: result=" << static_cast<double>(scaled) << endl;
-    cout << "[debug] approximate_real_value: scaled=" << scaled / denom / denom<< ", denom=" << denom << endl;
-    return static_cast<double>(scaled / denom );
+    const int depth = _depth_from_fractional_bits(fractional_bits);
+    return (double)dequantize(value, depth); // uses sign via getBit(60) and divides by (1<<Q)^depth
 }
 
 void ensure_bound_above_norm(F &bound, F &bound_sq, const F &norm_sq, float &bound_value) {
@@ -107,6 +191,25 @@ vector<F> flatten_matrix(const vector<vector<F>> &matrix) {
     }
     return flattened;
 }
+
+// in CNN.cpp
+static vector<F> derive_challenge_mask_from_column(const vector<F>& col) {
+    F seed = F_ZERO;
+    for (int i = 0; i < (int)col.size(); ++i) {
+        F mix = mimc_hash(col[i], F(i + 1));
+        seed += mix;
+    }
+
+    vector<F> mask(col.size());
+    F state = seed;
+    const int offset = (int)col.size() + 1;
+    for (int i = 0; i < (int)col.size(); ++i) {
+        state = mimc_hash(state, F(offset + i));  // returning overload
+        mask[i] = state;
+    }
+    return mask;
+}
+
 
 void dump_gradient(const string &label, int output_index, const vector<F> &gradient) {
 	std::ofstream out_file(label + ".txt");
@@ -143,20 +246,121 @@ void dump_tensor_gradient(const string &label,
 	}
 }
 
-GradientComputation compute_input_gradient(convolutional_network net,
-                                           int output_index,
-                                           const vector<vector<vector<vector<F>>>> &original_input,
-                                           int sample_index = 0) {
+
+static GradientComputation backprop_with_output_seed(
+        convolutional_network net,
+        vector<vector<F>> &out_der,
+        const vector<vector<vector<vector<F>>>> &original_input,
+        int sample_index = 0) {
+
     if (batch != 1) {
         throw runtime_error("Sensitivity proof currently supports batch size 1 only");
     }
     if (original_input.empty()) {
         throw runtime_error("Original input tensor is empty");
     }
+    if (sample_index < 0 || sample_index >= batch) {
+        throw runtime_error("Sample index out of range");
+    }
 
     GradientComputation result;
     reset_backprop_state(net);
 
+    struct convolution_layer_backprop conv_der;
+    struct dense_layer_backprop dense_der;
+    struct relu_layer_backprop relu_der;
+    int relu_counter = (int)net.relus.size() - 1;
+    int in_size;
+    vector<vector<vector<vector<F>>>> der(batch), dx(batch);
+    vector<vector<F>> dense_dx(batch);
+
+    for (int i = (int)net.Weights.size() - 1; i >= 0; --i) {
+        dense_der = dense_backprop(out_der, net.fully_connected[i]);
+        net.fully_connected_backprop.push_back(dense_der);
+
+        vector<F> v = convert2vector(out_der);
+        relu_der = relu_backprop(v, net.relus[relu_counter]);
+        for (int b = 0; b < (int)out_der.size(); ++b) {
+            for (int k = 0; k < (int)out_der[b].size(); ++k) {
+                out_der[b][k] = v[b * (int)out_der[b].size() + k];
+            }
+        }
+        net.relus_backprop.push_back(relu_der);
+        in_size = (int)net.Weights[i][0].size();
+        --relu_counter;
+    }
+    for (int b = 0; b < batch; ++b) {
+        der[b].resize(net.final_out);
+        for (int j = 0; j < net.final_out; ++j) {
+            der[b][j].resize(net.flatten_n);
+            for (int k = 0; k < net.flatten_n; ++k) {
+                der[b][j][k].assign(net.flatten_n, F_ZERO);
+            }
+            for (int k = 0; k < net.final_w; ++k) {
+                for (int l = 0; l < net.final_w; ++l) {
+                    der[b][j][k][l] = out_der[b][net.final_w * net.final_w * j + k * net.final_w + l];
+                }
+            }
+        }
+    }
+
+    int real_dx_width = net.final_w;
+    if (net.convolution_pooling[(int)net.Filters.size() - 1] != 0) {
+        net.avg_backprop.push_back(avg_pool_der(der, real_dx_width, net.avg_layers[(int)net.Filters.size() - 1].n));
+        real_dx_width *= 2;
+    }
+    printf("Avg Pooling backprop for last layer==============================\n");
+    for (int i = (int)net.Filters.size() - 1; i >= 0; --i) {
+        net.convolutions_backprop.push_back(conv_backprop(der, real_dx_width, net.convolutions[i], net.Rotated_Filters[i]));
+        if (i != 0) {
+            if (net.convolution_pooling[i - 1] != 0) {
+                net.avg_backprop.push_back(avg_pool_der(der, real_dx_width, net.avg_layers[i - 1].n));
+                real_dx_width *= 2;
+            }
+
+            int w = (int)der[0][0].size();
+            net.der_dim.push_back((int)(der.size() * der[0].size() * w * w));
+            if ((int)der.size() * (int)der[0].size() * w * w != (int)net.relus[relu_counter].most_significant_bits.size()) {
+                vector<vector<vector<vector<F>>>> temp(der.size());
+                net.der.push_back(der);
+                w /= 2;
+                net.w.push_back(w);
+                for (int j = 0; j < (int)temp.size(); ++j) {
+                    temp[j].resize(der[j].size());
+                    for (int k = 0; k < (int)temp[j].size(); ++k) {
+                        temp[j][k].resize(w);
+                        for (int l = 0; l < w; ++l) {
+                            temp[j][k][l].resize(w);
+                            for (int m = 0; m < w; ++m) {
+                                temp[j][k][l][m] = der[j][k][l][m];
+                            }
+                        }
+                    }
+                }
+                der = std::move(temp);
+            }
+
+            vector<F> v = tensor2vector(der);
+            relu_der = relu_backprop(v, net.relus[relu_counter]);
+            der = vector2tensor(relu_der.dx, der, (int)der[0][0].size());
+            net.relus_backprop.push_back(relu_der);
+            --relu_counter;
+        }
+    }
+    vector<vector<vector<vector<F>>>> input_dx = batch_convolution_der(original_input, der, net.Rotated_Filters[0]);
+
+    result.annotated_net   = std::move(net);
+    result.gradient_tensor = std::move(input_dx);
+    result.gradient_flat   = tensor2vector(result.gradient_tensor);
+    return result;
+}
+
+
+
+GradientComputation compute_input_gradient(convolutional_network net,
+                                           int output_index,
+                                           const vector<vector<vector<vector<F>>>> &original_input,
+                                           int sample_index = 0) {
     const int dense_outputs = final_output_dimension(net);
     if (output_index < 0 || output_index >= dense_outputs) {
         throw runtime_error("Output index out of range");
@@ -164,111 +368,115 @@ GradientComputation compute_input_gradient(convolutional_network net,
     if (sample_index < 0 || sample_index >= batch) {
         throw runtime_error("Sample index out of range");
     }
-    // back_propagation(net);  // Ensure forward pass is done
-
 
     vector<vector<F>> out_der(batch);
     for (int b = 0; b < batch; ++b) {
         out_der[b].assign(dense_outputs, F_ZERO);
     }
-    out_der[sample_index][output_index] = quantize(1.0f);
-    // dump_gradient("dense_init", output_index, flatten_matrix(out_der));
-	struct convolution_layer_backprop conv_der;
-	struct dense_layer_backprop dense_der;
-	struct relu_layer_backprop relu_der;
-	int relu_counter = net.relus.size()-1;
-	int in_size;
-	vector<vector<vector<vector<F>>>> der(batch),dx(batch);
-	vector<vector<F>> dense_dx(batch);
-	// virgo::printNested(out_der, std::cout);
-	// std::cout << std::endl;
-	for(int i = net.Weights.size()-1; i >= 0; i--){
-		dense_der = dense_backprop(out_der,net.fully_connected[i]);
-		net.fully_connected_backprop.push_back(dense_der);
-		vector<F> v = convert2vector(out_der);
-		relu_der = relu_backprop(v,net.relus[relu_counter]);
-		for(int j = 0; j < out_der.size(); j++){
-			for(int k = 0; k < out_der[j].size(); k++){
-				out_der[j][k] = v[j*out_der[j].size() + k];
-			}
-		}
-		net.relus_backprop.push_back(relu_der);
-		in_size = net.Weights[i][0].size();
-		relu_counter--;
-	}
-
-	int last_conv = net.Filters.size()-1;
-	for(int i = 0; i < der.size(); i++){
-		der[i].resize(net.final_out);
-		for(int j = 0; j < der[i].size(); j++){
-			der[i][j].resize(net.flatten_n);
-			for(int k = 0; k < der[i][j].size(); k++){
-				for(int l = 0; l < der[i][j].size(); l++){
-					der[i][j][k].push_back(F(0));
-				}
-			}
-			for(int k = 0; k < net.final_w; k++){
-				for(int l = 0; l < net.final_w; l++){
-					der[i][j][k][l] = out_der[i][net.final_w*net.final_w*j + k*net.final_w + l];
-				}
-			}
-		}
-	}
-
-	int real_dx_width = net.final_w; 
-	if(net.convolution_pooling[net.Filters.size() - 1] != 0){
-		printf("Avg Pooling backprop for last layer==============================\n");
-		net.avg_backprop.push_back(avg_pool_der(der,real_dx_width,net.avg_layers[net.Filters.size() - 1].n));
-		real_dx_width *=2;
-	}
-	for(int i = net.Filters.size() - 1; i >= 0; i--){
-		
-		net.convolutions_backprop.push_back(conv_backprop(der,real_dx_width,net.convolutions[i],net.Rotated_Filters[i]));
-		if(i != 0){
-			if(net.convolution_pooling[i-1] != 0){
-				net.avg_backprop.push_back(avg_pool_der(der,real_dx_width,net.avg_layers[i-1].n));
-				real_dx_width *= 2;
-			}
-			
-			int w = der[0][0].size();
-			net.der_dim.push_back(der.size()*der[0].size()*w*w);
-			if(der.size()*der[0].size()*w*w != net.relus[relu_counter].most_significant_bits.size()){
-				vector<vector<vector<vector<F>>>> temp(der.size());
-				net.der.push_back(der);
-
-				w = w/2;
-				net.w.push_back(w);
-				for(int j = 0; j < temp.size(); j++){
-					temp[j].resize(der[j].size());
-					for(int k = 0; k < temp[j].size(); k++){
-						temp[j][k].resize(w);
-						for(int l = 0; l < w; l++){
-							temp[j][k][l].resize(w);
-							for(int m = 0; m < w; m++){
-								temp[j][k][l][m] = der[j][k][l][m];
-							}
-						}
-					}
-				}
-				der = temp;
-			}
-			vector<F> v = tensor2vector(der);
-			relu_der = relu_backprop(v,net.relus[relu_counter]);
-			der = vector2tensor(relu_der.dx,der,w);
-			net.relus_backprop.push_back(relu_der);
-			relu_counter--;
-		}
-	}
-
-    vector<vector<vector<vector<F>>>> input_dx = batch_convolution_der(original_input, der, net.Rotated_Filters[0]);
-    std::cout << net.convolutions_backprop.size() << " convolution backprop layers processed.\n";
-    result.annotated_net = std::move(net);
-    result.gradient_tensor = std::move(input_dx);
-    result.gradient_flat = tensor2vector(result.gradient_tensor);
-    return result;
+    out_der[sample_index][output_index] = quantize(1.0f);  // one-hot seed
+    printf("Output derivative seed for output index %d set.\n", output_index);
+    return backprop_with_output_seed(net, out_der, original_input, sample_index);
 }
 
+GradientComputation compute_input_vjp(convolutional_network net,
+                                      const vector<F>& upstream_r,
+                                      const vector<vector<vector<vector<F>>>> &original_input,
+                                      int sample_index = 0) {
+    const int dense_outputs = final_output_dimension(net);
+    if ((int)upstream_r.size() != dense_outputs) {
+        throw runtime_error("upstream_r dimension mismatch with final output dimension");
+    }
+    if (sample_index < 0 || sample_index >= batch) {
+        throw runtime_error("Sample index out of range");
+    }
+
+    vector<vector<F>> out_der(batch);
+    for (int b = 0; b < batch; ++b) {
+        out_der[b].assign(dense_outputs, F_ZERO);
+    }
+    for (int k = 0; k < dense_outputs; ++k) {
+        out_der[sample_index][k] = upstream_r[k];
+    }
+
+    return backprop_with_output_seed(net, out_der, original_input, sample_index);
+}
+
+
+
+
+
 } // namespace
+
+// SensitivityProofResult prove_model_sensitivity(convolutional_network net,
+//                                                const vector<vector<vector<vector<F>>>> &input_tensor,
+//                                                int feature_index,
+//                                                float initial_bound) {
+//     if (feature_index < 0) {
+//         throw runtime_error("Feature index must be non-negative");
+//     }
+//     SensitivityProofResult result;
+//     const int total_features = input_feature_count(input_tensor);
+//     std::cout << "Input feature count: " << total_features << '\n';
+//     if (feature_index >= total_features) {
+//         throw runtime_error("Feature index exceeds input dimensionality");
+//     }
+//     const int effective_depth = effective_gradient_depth(net);
+//     feature_index = 300;
+//     const int outputs = final_output_dimension(net);
+//     vector<F> gradient_column(outputs, F_ZERO);
+//     result.gradient_proofs.reserve(outputs);
+//     JacobianResult R;
+//     R.J_rows_fixed.resize(outputs);
+//     for (int out_idx = 0; out_idx < outputs; ++out_idx) {
+// 		vector<vector<vector<vector<F>>>> dX;
+// 		GradientComputation computation =
+//             compute_input_gradient(net, out_idx, input_tensor);
+// 		gradient_column[out_idx] = computation.gradient_flat[feature_index];
+
+//         R.J_rows_fixed[out_idx] = std::move(computation.gradient_flat);
+// 		Transcript.clear();
+//         cout << "Gradient column for output " << out_idx << ":" << endl;
+//         for (size_t i = 0; i < computation.gradient_flat.size(); i++) {
+//             if (computation.gradient_flat[i] != F_ZERO) {
+//                 cout << "  [" << i << "] = " << approximate_real_value(computation.gradient_flat[i])
+//                      << " (raw=" << static_cast<long long>(computation.gradient_flat[i].toint128()) << ")"
+//                      << " <-- selected feature" << endl;
+//             }
+//         }
+// 		// prove_backprop(computation.annotated_net);
+// 		result.gradient_proofs.push_back(Transcript);
+// 		Transcript.clear();
+//     }
+
+//     result.gradient_column = std::move(gradient_column);
+    
+//     print_selected_feature_column_true_with_depth(R.J_rows_fixed, feature_index, effective_depth);
+//     F norm_sq = F_ZERO;
+//     for (const F &component : result.gradient_column) {
+//         norm_sq += component * component;
+//     }
+//     result.gradient_norm_sq = norm_sq;
+
+//     float bound_value = std::max(initial_bound, 1.0f);
+//     F bound = quantize(bound_value);
+//     F bound_sq = bound * bound;
+//     ensure_bound_above_norm(bound, bound_sq, norm_sq, bound_value);
+
+//     result.bound_value = bound_value;
+//     result.bound_sq = bound_sq;
+
+//     vector<F> range_proof_data = {norm_sq, bound_sq - norm_sq};
+//     vector<F> randomness = generate_randomness(1, F_ZERO);
+//     F eval = evaluate_vector(range_proof_data, randomness);
+//     vector<F> bits = prepare_bit_vector(range_proof_data, 64);
+
+//     Transcript.clear();
+//     Transcript.push_back(_prove_bit_decomposition(bits, randomness, eval, 64));
+//     result.norm_bound_proof = Transcript;
+//     Transcript.clear();
+
+//     return result;
+// }
 
 SensitivityProofResult prove_model_sensitivity(convolutional_network net,
                                                const vector<vector<vector<vector<F>>>> &input_tensor,
@@ -282,31 +490,75 @@ SensitivityProofResult prove_model_sensitivity(convolutional_network net,
     if (feature_index >= total_features) {
         throw runtime_error("Feature index exceeds input dimensionality");
     }
-    feature_index = 199;
+    const int effective_depth = effective_gradient_depth(net);
+
     const int outputs = final_output_dimension(net);
     vector<F> gradient_column(outputs, F_ZERO);
-    result.gradient_proofs.reserve(outputs);
-    for (int out_idx = 0; out_idx < outputs; ++out_idx) {
-		vector<vector<vector<vector<F>>>> dX;
-		GradientComputation computation =
-            compute_input_gradient(net, out_idx, input_tensor);
-		gradient_column[out_idx] = computation.gradient_flat[feature_index];
-		Transcript.clear();
-        cout << "Gradient column for output " << out_idx << ":" << endl;
-        for (size_t i = 0; i < computation.gradient_flat.size(); i++) {
-            if (i == feature_index) {
-                cout << "  [" << i << "] = " << approximate_real_value(computation.gradient_flat[i])
-                     << " (raw=" << static_cast<long long>(computation.gradient_flat[i].toint128()) << ")"
-                     << " <-- selected feature" << endl;
-            }
-        }
-		prove_backprop(computation.annotated_net);
-		result.gradient_proofs.push_back(Transcript);
-		Transcript.clear();
+    JacobianResult R;
+    R.J_rows_fixed.resize(outputs);
+
+    // for (int out_idx = 0; out_idx < outputs; ++out_idx) {
+    //     GradientComputation computation = compute_input_gradient(net, out_idx, input_tensor, 0);
+    //     if ((int)computation.gradient_flat.size() <= feature_index) {
+    //         throw runtime_error("feature_index out of range in gradient_flat");
+    //     }
+    //     gradient_column[out_idx] = computation.gradient_flat[feature_index];
+    //     R.J_rows_fixed[out_idx] = std::move(computation.gradient_flat);
+    //     // prove_backprop(computation.annotated_net);
+    // }
+
+    // result.gradient_column = gradient_column;
+    vector<F> mask = derive_challenge_mask_from_column(gradient_column);
+    for (int i = 0; i < mask.size(); ++i) {
+        std::cout << "Mask[" << i << "] = " << approximate_real_value(mask[i]) << '\n'; 
     }
 
-    result.gradient_column = std::move(gradient_column);
+    GradientComputation vjp = compute_input_vjp(net, mask, input_tensor);
+    if ((int)vjp.gradient_flat.size() <= feature_index) {
+        throw runtime_error("feature_index out of range in VJP gradient_flat");
+    }
+    F masked = vjp.gradient_flat[feature_index];
+    bool alll_zero = true;
+    for (int i = 0; i < vjp.gradient_flat.size(); ++i) {
+        if (vjp.gradient_flat[i] != F_ZERO) {
+            alll_zero = false;
+            break;
+        }
 
+        std::cout << "VJP Gradient[" << i << "] = " << approximate_real_value(vjp.gradient_flat[i]) << '\n'; 
+    }
+
+    F lhs = F_ZERO;
+    for (int i = 0; i < outputs; ++i) {
+        lhs = lhs + gradient_column[i] * mask[i];
+    }
+    if (lhs != masked) {
+        std::cerr << "[WARNING] one-shot linear check failed: <r, column> != masked_derivative\n";
+    }
+
+    Transcript.clear();
+    auto __t_start = std::chrono::high_resolution_clock::now();
+    prove_backprop(vjp.annotated_net);
+    
+    auto __t_end = std::chrono::high_resolution_clock::now();
+    auto __elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(__t_end - __t_start).count();
+    std::cout << "[timing] prove_backprop took " << __elapsed_ms << " ms" << std::endl;
+    std::cout << "size of model: " << count_parameters(net) << std::endl;
+    vector<struct proof> backprop_proof = Transcript;
+    Transcript.clear();
+    vector<F> v1 = gradient_column;
+    vector<F> v2 = mask;
+    pad_vector(v1);
+    pad_vector(v2);
+    vector<F> rand = generate_randomness((int)log2(v1.size()), F_ZERO);
+    struct proof sum_pf = generate_2product_sumcheck_proof(v1, v2, rand.back());
+
+    result.gradient_proofs.clear();
+    result.gradient_proofs.push_back(backprop_proof);
+    result.gradient_proofs[0].push_back(sum_pf);
+
+    result.linear_mask = std::move(mask);
+    result.masked_derivative = masked;
     F norm_sq = F_ZERO;
     for (const F &component : result.gradient_column) {
         norm_sq += component * component;
@@ -334,18 +586,18 @@ SensitivityProofResult prove_model_sensitivity(convolutional_network net,
     return result;
 }
 
+
 void run_sensitivity_proof_demo() {
     const int batch_size = 1;
     const int channels = 1;
-    const int feature_index = 0;
-    const float initial_bound = 64.0f;
+    const int feature_index = 324;
+    const float initial_bound = 1.0f;
 
-    convolutional_network net = init_network(MODEL_LENET, batch_size, channels);
+    convolutional_network net = init_network(2, batch_size, channels);
     vector<vector<vector<vector<F>>>> input_tensor;
     net = feed_forward(input_tensor, net, channels);
-
-    SensitivityProofResult proof =
-        prove_model_sensitivity(net, input_tensor, feature_index, initial_bound);
+    std::cout << "Network feedforward complete.\n";
+    SensitivityProofResult proof = prove_model_sensitivity(net, input_tensor, feature_index, initial_bound);
 
     double total_backprop_kb = 0.0;
     for (const auto &proofs : proof.gradient_proofs) {
@@ -647,7 +899,7 @@ void run_integrated_gradients_demo() {
     const int feature_index = 199;
     const int steps = 1;
 
-    convolutional_network net = init_network(MODEL_LENET, batch_size, channels);
+    convolutional_network net = init_network(SUPERNET, batch_size, channels);
 
     vector<vector<vector<vector<F>>>> X;
     net = feed_forward(X, net, channels);
@@ -662,4 +914,3 @@ void run_integrated_gradients_demo() {
     std::cout << "  Backprop proof size (sum over steps*outputs): "
               << kb_backprop << " KB\n";
 }
-

@@ -151,7 +151,6 @@ namespace virgo {
         _printIndent(os, indent);
         os << "}";
     }
-
 }
 
 
